@@ -22,32 +22,32 @@ Scalable multimodal document ETL where deterministic parsing does first-pass ext
 
 ```mermaid
 flowchart TD
-    A[Raw Files\nPDF/IMG/AUD/VID/Chat Export] --> B[Ingest + Catalogue\nsha256, document_id, media metadata]
-    B --> C[State DB (SQLite)\ndocuments/pages/chunks/relationships\nvector_index/paystubs/fallback_events/stage_metrics]
+    A["Raw files<br/>PDF, IMG, AUD, VID, Chat export"] --> B["Ingest and catalogue<br/>sha256, document_id, media metadata"]
+    B --> C["State DB<br/>documents, pages, chunks, relationships<br/>vector_index, paystubs, fallback_events, stage_metrics"]
 
-    B --> D[Extract Text Stage]
-    D --> D1[PDF Text Layer\nDeterministic parse]
-    D --> D2[OCR Tier\nImage + scanned PDF page]
-    D --> D3[ASR Tier\nAudio/Video -> timestamp segments]
-    D --> D4[Chat Export Parser\nDeterministic thread transcript]
-    D2 --> D5[LLM Fallback (Controlled)\ntriggered + audited + cached]
+    B --> D["Extract text stage"]
+    D --> D1["PDF text layer<br/>deterministic parse"]
+    D --> D2["OCR tier<br/>image and scanned PDF page"]
+    D --> D3["ASR tier<br/>audio and video to timestamp segments"]
+    D --> D4["Chat export parser<br/>deterministic thread transcript"]
+    D2 --> D5["LLM fallback controlled<br/>triggered, audited, cached"]
 
-    D1 --> E[Transcript Artifacts\nper page/segment text]
+    D1 --> E["Transcript artifacts<br/>per page or segment text"]
     D2 --> E
     D3 --> E
     D4 --> E
     D5 --> E
 
-    E --> F[Chunk + Embed\nstable chunk_id, hash/versioned embeddings]
-    F --> G[Vector Index]
+    E --> F["Chunk and embed<br/>stable chunk_id, hash and versioned embeddings"]
+    F --> G["Vector index"]
 
-    E --> H[Summarize]
-    F --> I[Entities + Relationships\nevidence-first]
-    E --> J[Payment Records\nreceipt/invoice/payment-sheet parser]
+    E --> H["Summarize"]
+    F --> I["Entities and relationships<br/>evidence first"]
+    E --> J["Payment records<br/>receipt, invoice, payment-sheet parser"]
 
-    I --> K[relationships.jsonl + entity cards]
-    J --> L[paystubs.jsonl (payment records)]
-    C --> M[Observability\nstage_metrics + fallback_events]
+    I --> K["relationships.jsonl and entity cards"]
+    J --> L["paystubs.jsonl payment records"]
+    C --> M["Observability<br/>stage_metrics and fallback_events"]
 ```
 
 ## Repository layout
