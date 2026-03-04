@@ -208,9 +208,16 @@ def retrieve_top_k_chunks(
     qvec = _fake_embedding(query)
     rows = conn.execute(
         """
-        SELECT c.chunk_id, c.document_id, c.page_number, c.text_path, c.token_estimate, c.embedding_vector
+        SELECT
+            c.chunk_id,
+            c.document_id,
+            c.page_number,
+            c.text_path,
+            c.token_estimate,
+            v.vector_json AS embedding_vector
         FROM chunks c
-        ORDER BY c.updated_at DESC
+        JOIN vector_index v ON v.chunk_id = c.chunk_id
+        ORDER BY v.updated_at DESC
         LIMIT 5000
         """
     ).fetchall()
