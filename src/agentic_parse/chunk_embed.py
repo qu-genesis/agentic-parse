@@ -4,15 +4,27 @@ from pathlib import Path
 import hashlib
 import json
 import os
-import sqlite3
+
+from openai import OpenAI
 
 from .config import Settings
+from .db import Connection
 from .telemetry import record_stage_metric
 from .utils import append_jsonl, atomic_write_text
 
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "deterministic-local")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_VERSION = os.getenv("EMBEDDING_VERSION", "v1")
+EMBEDDING_DIMS = int(os.getenv("EMBEDDING_DIMS", "1536"))
+
+_openai_client: OpenAI | None = None
+
+
+def _get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI()
+    return _openai_client
 
 
 def _chunk_id(page_id: str, index: int) -> str:
@@ -27,13 +39,24 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _fake_embedding(text: str, dims: int = 32) -> list[float]:
+def _fake_embedding(text: str) -> list[float]:
+    """Deterministic stand-in used when EMBEDDING_MODEL=deterministic-local."""
     digest = hashlib.sha256(text.encode("utf-8")).digest()
-    values = []
-    for i in range(dims):
-        b = digest[i % len(digest)]
-        values.append((b / 255.0) * 2.0 - 1.0)
-    return values
+    return [(digest[i % len(digest)] / 255.0) * 2.0 - 1.0 for i in range(EMBEDDING_DIMS)]
+
+
+def _embed_text(text: str) -> list[float]:
+    """Return an embedding vector for *text*.
+
+    Uses OpenAI when EMBEDDING_MODEL is a real model name; falls back to a
+    deterministic hash-based vector when EMBEDDING_MODEL=deterministic-local
+    (useful for tests / offline development).
+    """
+    if EMBEDDING_MODEL == "deterministic-local":
+        return _fake_embedding(text)
+    client = _get_openai_client()
+    response = client.embeddings.create(model=EMBEDDING_MODEL, input=text)
+    return response.data[0].embedding
 
 
 def _split_text(text: str, max_chars: int = 2000, overlap: int = 200) -> list[tuple[int, int, str]]:
@@ -53,26 +76,30 @@ def _split_text(text: str, max_chars: int = 2000, overlap: int = 200) -> list[tu
     return spans
 
 
+def _vec_str(vector: list[float]) -> str:
+    """Format a Python float list as a pgvector literal: '[1.0,2.0,...]'."""
+    return "[" + ",".join(map(str, vector)) + "]"
+
+
 def _upsert_vector_index(
     settings: Settings,
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     chunk_id: str,
     document_id: str,
     vector: list[float],
 ) -> None:
-    vector_json = json.dumps(vector)
     conn.execute(
         """
-        INSERT INTO vector_index (chunk_id, document_id, embedding_model, embedding_version, vector_json)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO vector_index (chunk_id, document_id, embedding_model, embedding_version, embedding)
+        VALUES (%s, %s, %s, %s, %s::vector)
         ON CONFLICT(chunk_id) DO UPDATE SET
-            embedding_model = excluded.embedding_model,
-            embedding_version = excluded.embedding_version,
-            vector_json = excluded.vector_json,
+            embedding_model = EXCLUDED.embedding_model,
+            embedding_version = EXCLUDED.embedding_version,
+            embedding = EXCLUDED.embedding,
             updated_at = CURRENT_TIMESTAMP
         """,
-        (chunk_id, document_id, EMBEDDING_MODEL, EMBEDDING_VERSION, vector_json),
+        (chunk_id, document_id, EMBEDDING_MODEL, EMBEDDING_VERSION, _vec_str(vector)),
     )
     append_jsonl(
         settings.vector_index_jsonl,
@@ -86,7 +113,7 @@ def _upsert_vector_index(
     )
 
 
-def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
+def chunk_and_embed(settings: Settings, conn: Connection) -> int:
     rows = conn.execute(
         """
         SELECT p.page_id, p.document_id, p.page_number, p.text_path
@@ -108,7 +135,7 @@ def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
             chunk_id = _chunk_id(row["page_id"], idx)
             text_hash = _text_hash(chunk_text)
             existing = conn.execute(
-                "SELECT chunk_text_hash, embedding_version FROM chunks WHERE chunk_id = ?",
+                "SELECT chunk_text_hash, embedding_version FROM chunks WHERE chunk_id = %s",
                 (chunk_id,),
             ).fetchone()
 
@@ -117,8 +144,7 @@ def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
             if not out.exists() or out.read_text(encoding="utf-8") != chunk_text:
                 atomic_write_text(out, chunk_text)
 
-            vector = _fake_embedding(chunk_text)
-            vector_json = json.dumps(vector)
+            vector = _embed_text(chunk_text)
 
             if existing and existing["chunk_text_hash"] == text_hash and existing["embedding_version"] == EMBEDDING_VERSION:
                 _upsert_vector_index(
@@ -136,17 +162,16 @@ def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
                 INSERT INTO chunks (
                     chunk_id, page_id, document_id, page_number, chunk_index,
                     text_path, char_start, char_end, token_estimate,
-                    chunk_text_hash, embedding_vector, embedding_model, embedding_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chunk_text_hash, embedding_model, embedding_version
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(chunk_id) DO UPDATE SET
-                    text_path = excluded.text_path,
-                    char_start = excluded.char_start,
-                    char_end = excluded.char_end,
-                    token_estimate = excluded.token_estimate,
-                    chunk_text_hash = excluded.chunk_text_hash,
-                    embedding_vector = excluded.embedding_vector,
-                    embedding_model = excluded.embedding_model,
-                    embedding_version = excluded.embedding_version,
+                    text_path = EXCLUDED.text_path,
+                    char_start = EXCLUDED.char_start,
+                    char_end = EXCLUDED.char_end,
+                    token_estimate = EXCLUDED.token_estimate,
+                    chunk_text_hash = EXCLUDED.chunk_text_hash,
+                    embedding_model = EXCLUDED.embedding_model,
+                    embedding_version = EXCLUDED.embedding_version,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -160,7 +185,6 @@ def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
                     end,
                     _token_estimate(chunk_text),
                     text_hash,
-                    vector_json,
                     EMBEDDING_MODEL,
                     EMBEDDING_VERSION,
                 ),
@@ -177,7 +201,7 @@ def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
 
     for doc_id in touched_docs:
         conn.execute(
-            "UPDATE documents SET status_embed = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = ?",
+            "UPDATE documents SET status_embed = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = %s",
             (doc_id,),
         )
 
@@ -195,18 +219,19 @@ def chunk_and_embed(settings: Settings, conn: sqlite3.Connection) -> int:
 
 
 def retrieve_top_k_chunks(
-    conn: sqlite3.Connection,
+    conn: Connection,
     query: str,
     *,
     top_k: int,
     max_chunks: int,
     max_tokens: int,
     document_id: str | None = None,
-) -> list[sqlite3.Row]:
+) -> list:
     if top_k > max_chunks:
         raise ValueError(f"top_k ({top_k}) exceeds max_chunks ({max_chunks})")
 
-    qvec = _fake_embedding(query)
+    qvec = _embed_text(query)
+
     if document_id:
         rows = conn.execute(
             """
@@ -215,15 +240,14 @@ def retrieve_top_k_chunks(
                 c.document_id,
                 c.page_number,
                 c.text_path,
-                c.token_estimate,
-                v.vector_json AS embedding_vector
+                c.token_estimate
             FROM chunks c
             JOIN vector_index v ON v.chunk_id = c.chunk_id
-            WHERE c.document_id = ?
-            ORDER BY v.updated_at DESC
-            LIMIT 5000
+            WHERE c.document_id = %s
+            ORDER BY v.embedding <=> %s::vector
+            LIMIT %s
             """,
-            (document_id,),
+            (document_id, _vec_str(qvec), top_k),
         ).fetchall()
     else:
         rows = conn.execute(
@@ -233,32 +257,18 @@ def retrieve_top_k_chunks(
                 c.document_id,
                 c.page_number,
                 c.text_path,
-                c.token_estimate,
-                v.vector_json AS embedding_vector
+                c.token_estimate
             FROM chunks c
             JOIN vector_index v ON v.chunk_id = c.chunk_id
-            ORDER BY v.updated_at DESC
-            LIMIT 5000
-            """
+            ORDER BY v.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (_vec_str(qvec), top_k),
         ).fetchall()
 
-    scored: list[tuple[float, sqlite3.Row]] = []
-    for row in rows:
-        try:
-            vec = json.loads(row["embedding_vector"])
-            if not isinstance(vec, list):
-                continue
-            dot = sum(float(a) * float(b) for a, b in zip(qvec, vec))
-            scored.append((dot, row))
-        except Exception:
-            continue
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    selected: list[sqlite3.Row] = []
+    selected = []
     token_sum = 0
-    for _, row in scored:
-        if len(selected) >= top_k:
-            break
+    for row in rows:
         projected = token_sum + int(row["token_estimate"])
         if projected > max_tokens:
             raise ValueError(

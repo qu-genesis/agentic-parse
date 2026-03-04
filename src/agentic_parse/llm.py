@@ -8,7 +8,7 @@ from pathlib import Path
 
 class LLMClient:
     def __init__(self) -> None:
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self._client = None
         self.token_input_total = 0

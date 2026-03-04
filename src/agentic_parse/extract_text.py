@@ -6,9 +6,9 @@ import csv
 import hashlib
 import json
 from pathlib import Path
-import sqlite3
 
 from .config import Settings
+from .db import Connection
 from .llm import get_llm_client
 from .telemetry import record_fallback_event, record_stage_metric
 from .utils import atomic_write_text, page_hash, probe_media_duration_seconds
@@ -111,7 +111,7 @@ def _run_tier2_llm_fallback(
     *,
     content: str,
     page_hash_value: str,
-    model_version: str = "gpt-4o",
+    model_version: str = "gpt-4o-mini",
 ) -> tuple[str, float]:
     llm = get_llm_client()
     system_prompt = (
@@ -355,7 +355,7 @@ def _extract_audio_or_video_document(
     return results
 
 
-def _process_document(settings: Settings, row: sqlite3.Row) -> list[PageResult]:
+def _process_document(settings: Settings, row) -> list[PageResult]:
     document_id = row["document_id"]
     path = Path(row["path"])
     family = row["doc_family"]
@@ -373,7 +373,7 @@ def _process_document(settings: Settings, row: sqlite3.Row) -> list[PageResult]:
     return []
 
 
-def extract_text(settings: Settings, conn: sqlite3.Connection, workers: int = 4) -> int:
+def extract_text(settings: Settings, conn: Connection, workers: int = 4) -> int:
     llm = get_llm_client()
     before_in, before_out = llm.usage_snapshot()
     rows = conn.execute(
@@ -399,7 +399,7 @@ def extract_text(settings: Settings, conn: sqlite3.Connection, workers: int = 4)
             touched_docs: set[str] = set()
             for result in page_results:
                 existing = conn.execute(
-                    "SELECT 1 FROM pages WHERE page_id = ?", (result.page_id,)
+                    "SELECT 1 FROM pages WHERE page_id = %s", (result.page_id,)
                 ).fetchone()
                 if existing:
                     skipped += 1
@@ -411,7 +411,7 @@ def extract_text(settings: Settings, conn: sqlite3.Connection, workers: int = 4)
                         ocr_status, ocr_confidence, text_path, page_hash,
                         timestamp_start_ms, timestamp_end_ms,
                         fallback_trigger_reason, fallback_region
-                    ) VALUES (?, ?, ?, ?, ?, 'done', ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, 'done', %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         result.page_id,
@@ -452,7 +452,7 @@ def extract_text(settings: Settings, conn: sqlite3.Connection, workers: int = 4)
                         status_asr = CASE WHEN doc_family IN ('audio','video') THEN 'done' ELSE status_asr END,
                         summary_status = 'ready_for_summary',
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE document_id = ?
+                    WHERE document_id = %s
                     """,
                     (doc_id,),
                 )

@@ -4,10 +4,10 @@ from pathlib import Path
 import hashlib
 import json
 import re
-import sqlite3
 
 from .chunk_embed import retrieve_top_k_chunks
 from .config import Settings
+from .db import Connection
 from .llm import get_llm_client
 from .telemetry import record_stage_metric
 from .utils import append_jsonl, write_json
@@ -99,7 +99,7 @@ def _extract_entities_with_llm(settings: Settings, text: str) -> tuple[list[dict
 
 def _upsert_relationship(
     settings: Settings,
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     edge_id: str,
     subject_entity_id: str,
@@ -112,7 +112,7 @@ def _upsert_relationship(
     evidence_excerpt: str,
     confidence: float,
 ) -> bool:
-    exists = conn.execute("SELECT 1 FROM relationships WHERE edge_id = ?", (edge_id,)).fetchone()
+    exists = conn.execute("SELECT 1 FROM relationships WHERE edge_id = %s", (edge_id,)).fetchone()
     if exists:
         return False
 
@@ -122,7 +122,7 @@ def _upsert_relationship(
             edge_id, subject_entity_id, predicate, object_entity_id,
             document_id, page_number, timestamp_start_ms, timestamp_end_ms,
             evidence_excerpt, confidence
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             edge_id,
@@ -155,7 +155,7 @@ def _upsert_relationship(
     return True
 
 
-def extract_entities(settings: Settings, conn: sqlite3.Connection) -> tuple[int, int]:
+def extract_entities(settings: Settings, conn: Connection) -> tuple[int, int]:
     llm = get_llm_client()
     before_in, before_out = llm.usage_snapshot()
     rows = conn.execute(
@@ -329,7 +329,7 @@ def extract_entities(settings: Settings, conn: sqlite3.Connection) -> tuple[int,
 
     for doc_id in touched_docs:
         conn.execute(
-            "UPDATE documents SET status_entities = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = ?",
+            "UPDATE documents SET status_entities = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = %s",
             (doc_id,),
         )
 
@@ -350,7 +350,7 @@ def extract_entities(settings: Settings, conn: sqlite3.Connection) -> tuple[int,
 
 def extract_for_query(
     settings: Settings,
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     query: str,
     top_k: int,

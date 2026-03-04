@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import sqlite3
 
 from .config import Settings
+from .db import Connection
 from .telemetry import record_stage_metric
 from .utils import (
     append_jsonl,
@@ -66,7 +66,7 @@ def _scan_pdf(path: Path) -> PdfInfo:
         return PdfInfo(page_count=None, has_text_layer=None)
 
 
-def ingest(settings: Settings, conn: sqlite3.Connection) -> int:
+def ingest(settings: Settings, conn: Connection) -> int:
     inserted = 0
     skipped = 0
     files = [p for p in settings.raw_root.rglob("*") if p.is_file()]
@@ -75,7 +75,7 @@ def ingest(settings: Settings, conn: sqlite3.Connection) -> int:
         document_id = short_doc_id(sha256)
 
         existing = conn.execute(
-            "SELECT 1 FROM documents WHERE document_id = ?", (document_id,)
+            "SELECT 1 FROM documents WHERE document_id = %s", (document_id,)
         ).fetchone()
         if existing:
             skipped += 1
@@ -101,7 +101,7 @@ def ingest(settings: Settings, conn: sqlite3.Connection) -> int:
                 document_id, sha256, path, media_type, doc_family, size_bytes,
                 page_count, has_text_layer, audio_duration_seconds,
                 video_duration_seconds, summary_status, status_ingest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_transcription', 'done')
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending_transcription', 'done')
             """,
             (
                 document_id,

@@ -3,11 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 from pathlib import Path
 
 from .chunk_embed import retrieve_top_k_chunks
 from .config import Settings
+from .db import Connection
 from .llm import get_llm_client
 from .telemetry import record_stage_metric
 from .utils import append_jsonl
@@ -225,7 +225,7 @@ def _normalize_record(record: dict) -> dict:
     }
 
 
-def extract_paystubs(settings: Settings, conn: sqlite3.Connection) -> tuple[int, int]:
+def extract_paystubs(settings: Settings, conn: Connection) -> tuple[int, int]:
     llm = get_llm_client()
     before_in, before_out = llm.usage_snapshot()
     docs = conn.execute(
@@ -290,18 +290,18 @@ def extract_paystubs(settings: Settings, conn: sqlite3.Connection) -> tuple[int,
                 INSERT INTO paystubs (
                     paystub_id, document_id, page_number, document_type, pay_period, pay_date,
                     gross_pay, net_pay, currency, items_json, validation_status, validation_notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(paystub_id) DO UPDATE SET
-                    page_number = excluded.page_number,
-                    document_type = excluded.document_type,
-                    pay_period = excluded.pay_period,
-                    pay_date = excluded.pay_date,
-                    gross_pay = excluded.gross_pay,
-                    net_pay = excluded.net_pay,
-                    currency = excluded.currency,
-                    items_json = excluded.items_json,
-                    validation_status = excluded.validation_status,
-                    validation_notes = excluded.validation_notes
+                    page_number = EXCLUDED.page_number,
+                    document_type = EXCLUDED.document_type,
+                    pay_period = EXCLUDED.pay_period,
+                    pay_date = EXCLUDED.pay_date,
+                    gross_pay = EXCLUDED.gross_pay,
+                    net_pay = EXCLUDED.net_pay,
+                    currency = EXCLUDED.currency,
+                    items_json = EXCLUDED.items_json,
+                    validation_status = EXCLUDED.validation_status,
+                    validation_notes = EXCLUDED.validation_notes
                 """,
                 (
                     paystub_id,

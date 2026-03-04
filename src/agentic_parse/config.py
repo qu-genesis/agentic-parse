@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,8 +11,11 @@ class Settings:
     raw_root: Path
 
     @property
-    def db_path(self) -> Path:
-        return self.workspace / "state" / "pipeline.sqlite3"
+    def db_dsn(self) -> str:
+        return os.environ.get(
+            "DATABASE_URL",
+            "postgresql://postgres:postgres@localhost:5432/agentic_parse",
+        )
 
     @property
     def catalogue_jsonl(self) -> Path:

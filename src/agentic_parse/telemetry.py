@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 
 from .config import Settings
+from .db import Connection
 from .utils import append_jsonl
 
 
 def record_stage_metric(
     settings: Settings,
-    conn: sqlite3.Connection,
+    conn: Connection,
     stage: str,
     processed: int,
     skipped: int,
@@ -33,7 +33,7 @@ def record_stage_metric(
         INSERT INTO stage_metrics (
             stage, processed_count, skipped_count, failed_count,
             token_input, token_output, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
         (
             stage,
@@ -55,7 +55,7 @@ def fallback_event_id(document_id: str, page_id: str | None, trigger_reason: str
 
 def record_fallback_event(
     settings: Settings,
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     document_id: str,
     page_id: str | None,
@@ -66,7 +66,7 @@ def record_fallback_event(
     model_version: str | None,
 ) -> None:
     event_id = fallback_event_id(document_id, page_id, trigger_reason, page_hash)
-    exists = conn.execute("SELECT 1 FROM fallback_events WHERE event_id = ?", (event_id,)).fetchone()
+    exists = conn.execute("SELECT 1 FROM fallback_events WHERE event_id = %s", (event_id,)).fetchone()
     if exists:
         return
 
@@ -75,7 +75,7 @@ def record_fallback_event(
         INSERT INTO fallback_events (
             event_id, document_id, page_id, source_tier,
             trigger_reason, region, page_hash, model_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (event_id, document_id, page_id, source_tier, trigger_reason, region, page_hash, model_version),
     )

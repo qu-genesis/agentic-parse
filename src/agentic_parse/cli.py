@@ -71,7 +71,7 @@ def main() -> None:
     settings = Settings(workspace=args.workspace, raw_root=args.raw_root)
     settings.ensure_dirs()
 
-    conn = connect(settings.db_path)
+    conn = connect(settings.db_dsn)
     init_schema(conn)
 
     if args.command == "ingest":

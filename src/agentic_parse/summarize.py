@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sqlite3
 
 from .chunk_embed import retrieve_top_k_chunks
 from .config import Settings
+from .db import Connection
 from .llm import get_llm_client
 from .telemetry import record_stage_metric
 from .utils import atomic_write_text
 
 
-def _build_context(chunks: list[sqlite3.Row], max_chars: int = 18000) -> str:
+def _build_context(chunks: list, max_chars: int = 18000) -> str:
     parts: list[str] = []
     total = 0
     for row in chunks:
@@ -25,7 +25,7 @@ def _build_context(chunks: list[sqlite3.Row], max_chars: int = 18000) -> str:
     return "\n".join(parts).strip()
 
 
-def summarize(settings: Settings, conn: sqlite3.Connection) -> int:
+def summarize(settings: Settings, conn: Connection) -> int:
     llm = get_llm_client()
     before_in, before_out = llm.usage_snapshot()
     docs = conn.execute(
@@ -79,7 +79,7 @@ def summarize(settings: Settings, conn: sqlite3.Connection) -> int:
             atomic_write_text(out, new_value)
             processed += 1
         conn.execute(
-            "UPDATE documents SET summary_status = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = ?",
+            "UPDATE documents SET summary_status = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = %s",
             (doc_id,),
         )
 
