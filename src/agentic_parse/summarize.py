@@ -3,74 +3,81 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 
+from .chunk_embed import retrieve_top_k_chunks
 from .config import Settings
 from .llm import get_llm_client
 from .telemetry import record_stage_metric
 from .utils import atomic_write_text
 
 
-def _first_sentence(text: str, limit: int = 240) -> str:
-    clean = " ".join(text.split())
-    if not clean:
-        return ""
-    for sep in ".!?":
-        pos = clean.find(sep)
-        if 0 < pos < limit:
-            return clean[: pos + 1]
-    return clean[:limit]
+def _build_context(chunks: list[sqlite3.Row], max_chars: int = 18000) -> str:
+    parts: list[str] = []
+    total = 0
+    for row in chunks:
+        text = Path(row["text_path"]).read_text(encoding="utf-8", errors="ignore").strip()
+        if not text:
+            continue
+        entry = f"[chunk_id:{row['chunk_id']} page:{row['page_number']}]\n{text}\n"
+        if total + len(entry) > max_chars:
+            break
+        parts.append(entry)
+        total += len(entry)
+    return "\n".join(parts).strip()
 
 
 def summarize(settings: Settings, conn: sqlite3.Connection) -> int:
     llm = get_llm_client()
     before_in, before_out = llm.usage_snapshot()
-    rows = conn.execute(
-        "SELECT page_id, document_id, page_number, text_path FROM pages ORDER BY document_id, page_number"
+    docs = conn.execute(
+        """
+        SELECT document_id
+        FROM documents
+        WHERE status_embed = 'done' AND summary_status != 'done'
+        ORDER BY created_at ASC
+        """
     ).fetchall()
 
-    writes = 0
+    processed = 0
     skipped = 0
-    per_doc: dict[str, list[str]] = {}
-    for row in rows:
-        text_path = Path(row["text_path"])
-        if not text_path.exists():
-            continue
-        text = text_path.read_text(encoding="utf-8")
-        out = settings.summaries_dir / row["document_id"] / f"page_{row['page_number']:04d}.summary.txt"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if out.exists():
-            summary = out.read_text(encoding="utf-8")
-            skipped += 1
+    for doc in docs:
+        doc_id = doc["document_id"]
+        chunks = retrieve_top_k_chunks(
+            conn,
+            "Summarize this document: key parties, dates, events, obligations, monetary amounts, and uncertainties.",
+            top_k=24,
+            max_chunks=48,
+            max_tokens=9000,
+            document_id=doc_id,
+        )
+        context = _build_context(chunks)
+        if not context:
+            document_summary = "No readable content."
         else:
             summary = llm.text(
-                task="page_summary",
+                task="document_summary_from_embeddings",
                 cache_dir=settings.llm_cache_dir,
                 system_prompt=(
-                    "You summarize investigative documents conservatively. "
-                    "Keep uncertainty, never infer missing facts."
+                    "You are a conservative analyst. Produce a concise factual summary using only provided chunks. "
+                    "Do not infer beyond evidence. Explicitly mention uncertainty when information is incomplete."
                 ),
                 user_prompt=(
-                    "Summarize this page in 1-2 sentences.\n"
-                    "If text is empty/illegible, return: 'No readable content.'\n\n"
-                    f"{text}"
+                    "Create a 5-8 sentence summary with this structure:\n"
+                    "1) document type/purpose\n2) key entities\n3) key dates/timeline\n"
+                    "4) financial or quantitative facts\n5) unresolved/uncertain points.\n\n"
+                    f"Context:\n{context}"
                 ),
-                max_output_tokens=180,
+                max_output_tokens=420,
             )
-            if summary is None:
-                summary = _first_sentence(text)
-            summary = summary.strip()
-            atomic_write_text(out, summary)
-            writes += 1
-        per_doc.setdefault(row["document_id"], []).append(summary)
+            document_summary = (summary or "No readable content.").strip()
 
-    for doc_id, summaries in per_doc.items():
-        document_summary = " ".join([s for s in summaries if s][:8])
         out = settings.summaries_dir / doc_id / "document.summary.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
         new_value = document_summary.strip()
         if out.exists() and out.read_text(encoding="utf-8") == new_value:
             skipped += 1
-            continue
-        atomic_write_text(out, new_value)
-        writes += 1
+        else:
+            atomic_write_text(out, new_value)
+            processed += 1
         conn.execute(
             "UPDATE documents SET summary_status = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = ?",
             (doc_id,),
@@ -81,11 +88,11 @@ def summarize(settings: Settings, conn: sqlite3.Connection) -> int:
         settings,
         conn,
         "summarize",
-        processed=writes,
+        processed=processed,
         skipped=skipped,
         failed=0,
         token_input=max(0, after_in - before_in),
         token_output=max(0, after_out - before_out),
     )
     conn.commit()
-    return writes
+    return processed

@@ -32,7 +32,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("chunk", help="Chunk page transcripts and compute embeddings.")
     sub.add_parser("summarize", help="Generate page/document summaries.")
     sub.add_parser("entities", help="Incrementally extract entities and relationships.")
-    sub.add_parser("paystubs", help="Extract and validate pay-stub fields deterministically.")
+    sub.add_parser("paystubs", help="Extract and validate payment records using embedding retrieval + LLM.")
 
     p_query = sub.add_parser("extract-query", help="Retrieval-first LLM extraction with hard caps.")
     p_query.add_argument("--query", required=True)

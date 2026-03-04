@@ -201,26 +201,46 @@ def retrieve_top_k_chunks(
     top_k: int,
     max_chunks: int,
     max_tokens: int,
+    document_id: str | None = None,
 ) -> list[sqlite3.Row]:
     if top_k > max_chunks:
         raise ValueError(f"top_k ({top_k}) exceeds max_chunks ({max_chunks})")
 
     qvec = _fake_embedding(query)
-    rows = conn.execute(
-        """
-        SELECT
-            c.chunk_id,
-            c.document_id,
-            c.page_number,
-            c.text_path,
-            c.token_estimate,
-            v.vector_json AS embedding_vector
-        FROM chunks c
-        JOIN vector_index v ON v.chunk_id = c.chunk_id
-        ORDER BY v.updated_at DESC
-        LIMIT 5000
-        """
-    ).fetchall()
+    if document_id:
+        rows = conn.execute(
+            """
+            SELECT
+                c.chunk_id,
+                c.document_id,
+                c.page_number,
+                c.text_path,
+                c.token_estimate,
+                v.vector_json AS embedding_vector
+            FROM chunks c
+            JOIN vector_index v ON v.chunk_id = c.chunk_id
+            WHERE c.document_id = ?
+            ORDER BY v.updated_at DESC
+            LIMIT 5000
+            """,
+            (document_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT
+                c.chunk_id,
+                c.document_id,
+                c.page_number,
+                c.text_path,
+                c.token_estimate,
+                v.vector_json AS embedding_vector
+            FROM chunks c
+            JOIN vector_index v ON v.chunk_id = c.chunk_id
+            ORDER BY v.updated_at DESC
+            LIMIT 5000
+            """
+        ).fetchall()
 
     scored: list[tuple[float, sqlite3.Row]] = []
     for row in rows:

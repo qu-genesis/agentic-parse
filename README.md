@@ -14,7 +14,7 @@ Scalable multimodal document ETL where deterministic parsing does first-pass ext
   - Chat exports: deterministic parser.
 - Stable chunking + embedding lifecycle (`chunk_text_hash`, embedding model/version) + vector index table.
 - Retrieval-first query extraction with hard limits (`top_k`, `max_chunks`, `max_tokens`).
-- Payment-record extraction (receipts/invoices/payment sheets; pay-stub fields optional) with deterministic currency parsing and conditional consistency checks.
+- Payment-record extraction (receipts/invoices/payment sheets; pay-stub fields optional) via retrieval-first `gpt-4o` extraction with validator checks.
 - Incremental entity/relationship extraction with page/timestamp evidence pointers.
 - Idempotent pipeline behavior, atomic artifact writes, and stage/fallback metrics.
 
@@ -55,10 +55,10 @@ flowchart TD
     F --> V["Vector index upsert (SQLite table + JSONL)"]
     V --> C
 
-    E --> S["Document summary"]
+    E --> S["Document summary from retrieved chunks (gpt-4o)"]
     F --> R["Retrieval top-k from vector_index<br/>max_chunks + max_tokens enforced"]
     R --> EN["Entity and relationship extraction (gpt-4o)"]
-    E --> PAY["Payment-record extraction"]
+    E --> PAY["Payment-record extraction from retrieved chunks (gpt-4o)"]
 
     EN --> O1["relationships.jsonl + entity cards"]
     PAY --> O2["paystubs.jsonl (payment records)"]
@@ -71,8 +71,8 @@ flowchart TD
     classDef state fill:#E3F2FD,stroke:#0D47A1,color:#0D47A1,stroke-width:1px;
     classDef decision fill:#F5F5F5,stroke:#424242,color:#212121,stroke-width:1px;
 
-    class A,B,D,P0,P1,P2,I0,T0,AV0,CH0,X0,E,F,V,S,R,PAY,O1,O2,O3,M det;
-    class L1,EN llm;
+    class A,B,D,P0,P1,P2,I0,T0,AV0,CH0,X0,E,F,V,R,O1,O2,O3,M det;
+    class L1,EN,S,PAY llm;
     class C state;
     class P3,I1 decision;
 ```
@@ -122,11 +122,11 @@ flowchart TD
     W3 --> Q5["Queue 5: entities_queue"]
     T0 --> Q6["Queue 6: payment_queue"]
 
-    Q4 --> WS["Worker: summarize"]
+    Q4 --> WS["Worker: summarize (retrieval + gpt-4o)"]
     WS --> DB
     Q5 --> WE["Worker: retrieval + entities gpt-4o"]
     WE --> DB
-    Q6 --> WP["Worker: payment record parser"]
+    Q6 --> WP["Worker: payment records (retrieval + gpt-4o)"]
     WP --> DB
 
     DB --> OBS["stage_metrics and fallback_events"]
@@ -137,8 +137,8 @@ flowchart TD
     classDef decision fill:#F5F5F5,stroke:#424242,color:#212121,stroke-width:1px;
     classDef queue fill:#EDE7F6,stroke:#4527A0,color:#311B92,stroke-width:1px;
 
-    class W0,W1,H1,H2,H3,H4,H5,H6,T0,W3,VI,WS,WP,OBS det;
-    class WL,WE llm;
+    class W0,W1,H1,H2,H3,H4,H5,H6,T0,W3,VI,OBS det;
+    class WL,WE,WS,WP llm;
     class DB state;
     class D0,D1,D2 decision;
     class Q0,Q1,Q2,Q3,Q4,Q5,Q6 queue;
@@ -152,8 +152,8 @@ flowchart TD
 - `src/agentic_parse/extract_text.py`: OCR/ASR/transcript pipeline.
 - `src/agentic_parse/chunk_embed.py`: chunking, embedding lifecycle, retrieval helper.
 - `src/agentic_parse/entities.py`: entity/relationship extraction + retrieval-first query mode.
-- `src/agentic_parse/paystub.py`: payment-record parsing/validation.
-- `src/agentic_parse/summarize.py`: transcript-first summaries.
+- `src/agentic_parse/paystub.py`: embedding-retrieved LLM payment-record extraction + validation.
+- `src/agentic_parse/summarize.py`: embedding-retrieved LLM document summaries.
 - `src/agentic_parse/llm.py`: OpenAI client wrapper + caching.
 - `src/agentic_parse/telemetry.py`: metrics and fallback audit logging.
 
