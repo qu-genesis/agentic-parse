@@ -1,0 +1,1 @@
+Use uv to run Python code with inline or metadata-defined dependencies.
