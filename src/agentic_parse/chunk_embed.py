@@ -4,12 +4,14 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import time
 
 from openai import OpenAI
+from tqdm import tqdm
 
 from .config import Settings
 from .db import Connection
-from .telemetry import record_stage_metric
+from .telemetry import record_costly_call, record_stage_metric
 from .utils import append_jsonl, atomic_write_text
 
 
@@ -114,6 +116,7 @@ def _upsert_vector_index(
 
 
 def chunk_and_embed(settings: Settings, conn: Connection) -> int:
+    stage_start = time.perf_counter()
     rows = conn.execute(
         """
         SELECT p.page_id, p.document_id, p.page_number, p.text_path
@@ -125,11 +128,43 @@ def chunk_and_embed(settings: Settings, conn: Connection) -> int:
     inserted_or_updated = 0
     skipped = 0
     touched_docs: set[str] = set()
+    seen_docs: set[str] = set()  # all docs whose pages were iterated (even if no chunks produced)
+    total_docs = len({row["document_id"] for row in rows})
+    progress = tqdm(total=total_docs, desc="chunk", unit="doc")
+    current_doc: str | None = None
+    current_doc_inserted = 0
+    current_doc_skipped = 0
+    current_doc_start = time.perf_counter()
+
+    def _finalize_doc(doc_id: str | None) -> None:
+        if not doc_id:
+            return
+        elapsed_ms = (time.perf_counter() - current_doc_start) * 1000.0
+        tqdm.write(
+            "[chunk] "
+            f"doc={doc_id} chunks_upserted={current_doc_inserted} "
+            f"chunks_skipped={current_doc_skipped} doc_elapsed_ms={elapsed_ms:.1f}"
+        )
+        progress.update(1)
+        progress.set_postfix(
+            inserted=inserted_or_updated,
+            skipped=skipped,
+            last_doc_chunks=current_doc_inserted,
+        )
+
     for row in rows:
+        if row["document_id"] != current_doc:
+            _finalize_doc(current_doc)
+            current_doc = row["document_id"]
+            current_doc_inserted = 0
+            current_doc_skipped = 0
+            current_doc_start = time.perf_counter()
+
         text_path = Path(row["text_path"])
         if not text_path.exists():
             continue
         text = text_path.read_text(encoding="utf-8")
+        seen_docs.add(row["document_id"])
         spans = _split_text(text)
         for idx, (start, end, chunk_text) in enumerate(spans, start=1):
             chunk_id = _chunk_id(row["page_id"], idx)
@@ -144,7 +179,24 @@ def chunk_and_embed(settings: Settings, conn: Connection) -> int:
             if not out.exists() or out.read_text(encoding="utf-8") != chunk_text:
                 atomic_write_text(out, chunk_text)
 
+            embed_started = time.perf_counter()
             vector = _embed_text(chunk_text)
+            embed_ms = (time.perf_counter() - embed_started) * 1000.0
+            record_costly_call(
+                settings,
+                conn,
+                stage="chunk_embed",
+                step="embed_chunk",
+                location="chunk_embed.chunk_and_embed",
+                call_type="embedding_call",
+                duration_ms=embed_ms,
+                document_id=row["document_id"],
+                chunk_id=chunk_id,
+                provider="openai" if EMBEDDING_MODEL != "deterministic-local" else "local",
+                model_version=EMBEDDING_MODEL,
+                metadata={"chunk_chars": len(chunk_text)},
+                success=True,
+            )
 
             if existing and existing["chunk_text_hash"] == text_hash and existing["embedding_version"] == EMBEDDING_VERSION:
                 _upsert_vector_index(
@@ -155,6 +207,7 @@ def chunk_and_embed(settings: Settings, conn: Connection) -> int:
                     vector=vector,
                 )
                 skipped += 1
+                current_doc_skipped += 1
                 continue
 
             conn.execute(
@@ -198,8 +251,14 @@ def chunk_and_embed(settings: Settings, conn: Connection) -> int:
             )
             inserted_or_updated += 1
             touched_docs.add(row["document_id"])
+            current_doc_inserted += 1
 
-    for doc_id in touched_docs:
+    _finalize_doc(current_doc)
+    progress.close()
+
+    # Mark all docs whose pages were visited as embedded — even docs with all-empty pages
+    # produce no chunks, but they have been fully processed by this stage.
+    for doc_id in seen_docs:
         conn.execute(
             "UPDATE documents SET status_embed = 'done', updated_at = CURRENT_TIMESTAMP WHERE document_id = %s",
             (doc_id,),
@@ -213,6 +272,10 @@ def chunk_and_embed(settings: Settings, conn: Connection) -> int:
         skipped=skipped,
         failed=0,
         metadata={"embedding_model": EMBEDDING_MODEL, "embedding_version": EMBEDDING_VERSION},
+    )
+    tqdm.write(
+        f"[chunk] completed docs={total_docs} chunks_upserted={inserted_or_updated} "
+        f"chunks_skipped={skipped} elapsed_s={(time.perf_counter() - stage_start):.2f}"
     )
     conn.commit()
     return inserted_or_updated
@@ -271,9 +334,7 @@ def retrieve_top_k_chunks(
     for row in rows:
         projected = token_sum + int(row["token_estimate"])
         if projected > max_tokens:
-            raise ValueError(
-                f"retrieval token budget exceeded: {projected} > {max_tokens} (reduce top_k or chunk size)"
-            )
+            break
         selected.append(row)
         token_sum = projected
 

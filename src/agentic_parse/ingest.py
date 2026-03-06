@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
+
+from tqdm import tqdm
 
 from .config import Settings
 from .db import Connection
-from .telemetry import record_stage_metric
+from .telemetry import record_costly_call, record_stage_metric
 from .utils import (
     append_jsonl,
     file_sha256,
@@ -70,7 +73,10 @@ def ingest(settings: Settings, conn: Connection) -> int:
     inserted = 0
     skipped = 0
     files = [p for p in settings.raw_root.rglob("*") if p.is_file()]
-    for path in files:
+    stage_start = time.perf_counter()
+    progress = tqdm(files, total=len(files), desc="ingest", unit="doc")
+    for path in progress:
+        doc_start = time.perf_counter()
         sha256 = file_sha256(path)
         document_id = short_doc_id(sha256)
 
@@ -79,6 +85,19 @@ def ingest(settings: Settings, conn: Connection) -> int:
         ).fetchone()
         if existing:
             skipped += 1
+            record_costly_call(
+                settings,
+                conn,
+                stage="ingest",
+                step="catalogue_document",
+                location="ingest.ingest",
+                call_type="io_catalogue",
+                duration_ms=(time.perf_counter() - doc_start) * 1000.0,
+                document_id=document_id,
+                metadata={"path": path.as_posix(), "skipped_existing": True},
+                success=True,
+            )
+            progress.set_postfix(inserted=inserted, skipped=skipped, last_doc_ms=f"{(time.perf_counter() - doc_start) * 1000.0:.1f}")
             continue
 
         family = _classify_family(path)
@@ -134,6 +153,24 @@ def ingest(settings: Settings, conn: Connection) -> int:
             },
         )
         inserted += 1
+        record_costly_call(
+            settings,
+            conn,
+            stage="ingest",
+            step="catalogue_document",
+            location="ingest.ingest",
+            call_type="io_catalogue",
+            duration_ms=(time.perf_counter() - doc_start) * 1000.0,
+            document_id=document_id,
+            metadata={"family": family, "path": path.as_posix()},
+            success=True,
+        )
+        progress.set_postfix(inserted=inserted, skipped=skipped, last_doc_ms=f"{(time.perf_counter() - doc_start) * 1000.0:.1f}")
+    progress.close()
+    elapsed = time.perf_counter() - stage_start
+    tqdm.write(
+        f"[ingest] completed files={len(files)} inserted={inserted} skipped={skipped} elapsed_s={elapsed:.2f}"
+    )
     record_stage_metric(settings, conn, "ingest", processed=inserted, skipped=skipped, failed=0)
     conn.commit()
     return inserted

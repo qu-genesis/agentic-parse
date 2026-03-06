@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 
@@ -13,6 +15,8 @@ class LLMClient:
         self._client = None
         self.token_input_total = 0
         self.token_output_total = 0
+        self._events_lock = threading.Lock()
+        self._call_events: list[dict] = []
         if self.api_key:
             try:
                 from openai import OpenAI  # type: ignore
@@ -35,8 +39,35 @@ class LLMClient:
         self.token_input_total += max(0, int(input_tokens))
         self.token_output_total += max(0, int(output_tokens))
 
+    def _record_call_event(
+        self,
+        *,
+        method: str,
+        task: str,
+        duration_ms: float,
+        cache_hit: bool,
+        success: bool,
+    ) -> None:
+        event = {
+            "method": method,
+            "task": task,
+            "duration_ms": round(max(0.0, float(duration_ms)), 2),
+            "cache_hit": bool(cache_hit),
+            "success": bool(success),
+        }
+        with self._events_lock:
+            self._call_events.append(event)
+
     def usage_snapshot(self) -> tuple[int, int]:
         return self.token_input_total, self.token_output_total
+
+    def call_event_count(self) -> int:
+        with self._events_lock:
+            return len(self._call_events)
+
+    def call_events_since(self, start_index: int) -> list[dict]:
+        with self._events_lock:
+            return [dict(e) for e in self._call_events[start_index:]]
 
     def _cache_key(self, task: str, system_prompt: str, user_prompt: str) -> str:
         material = f"{self.model}|{task}|{system_prompt}|{user_prompt}"
@@ -51,13 +82,28 @@ class LLMClient:
         max_output_tokens: int = 800,
         cache_key_override: str | None = None,
     ) -> str | None:
+        t0 = time.perf_counter()
         key = cache_key_override or self._cache_key(task=task, system_prompt=system_prompt, user_prompt=user_prompt)
         cache_path = self._cache_path(cache_dir, key)
         if cache_path.exists():
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            self._record_call_event(
+                method="text",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=True,
+                success=True,
+            )
             return str(payload.get("text", ""))
 
         if not self.enabled:
+            self._record_call_event(
+                method="text",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=False,
+            )
             return None
 
         try:
@@ -76,8 +122,22 @@ class LLMClient:
                 json.dumps({"model": self.model, "task": task, "text": text}),
                 encoding="utf-8",
             )
+            self._record_call_event(
+                method="text",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=True,
+            )
             return text
         except Exception:
+            self._record_call_event(
+                method="text",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=False,
+            )
             return None
 
     def json(
@@ -89,14 +149,29 @@ class LLMClient:
         max_output_tokens: int = 1400,
         cache_key_override: str | None = None,
     ) -> dict | None:
+        t0 = time.perf_counter()
         key = cache_key_override or self._cache_key(task=task, system_prompt=system_prompt, user_prompt=user_prompt)
         cache_path = self._cache_path(cache_dir, key)
         if cache_path.exists():
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
             data = payload.get("json")
+            self._record_call_event(
+                method="json",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=True,
+                success=isinstance(data, dict),
+            )
             return data if isinstance(data, dict) else None
 
         if not self.enabled:
+            self._record_call_event(
+                method="json",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=False,
+            )
             return None
 
         try:
@@ -120,12 +195,34 @@ class LLMClient:
                 json.dumps({"model": self.model, "task": task, "json": data}),
                 encoding="utf-8",
             )
+            self._record_call_event(
+                method="json",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=True,
+            )
             return data
         except Exception:
+            self._record_call_event(
+                method="json",
+                task=task,
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=False,
+            )
             return None
 
     def transcribe_audio(self, path: Path, model: str = "gpt-4o-mini-transcribe") -> list[dict] | None:
+        t0 = time.perf_counter()
         if not self.enabled:
+            self._record_call_event(
+                method="transcribe_audio",
+                task="audio_transcription",
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=False,
+            )
             return None
         try:
             with path.open("rb") as handle:
@@ -154,8 +251,22 @@ class LLMClient:
             approx_in = self._estimate_tokens(path.name)
             approx_out = self._estimate_tokens(" ".join([s["text"] for s in segments]))
             self._record_usage(approx_in, approx_out)
+            self._record_call_event(
+                method="transcribe_audio",
+                task="audio_transcription",
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=True,
+            )
             return segments
         except Exception:
+            self._record_call_event(
+                method="transcribe_audio",
+                task="audio_transcription",
+                duration_ms=(time.perf_counter() - t0) * 1000.0,
+                cache_hit=False,
+                success=False,
+            )
             return None
 
 

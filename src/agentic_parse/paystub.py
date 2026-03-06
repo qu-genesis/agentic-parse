@@ -141,21 +141,35 @@ def _extract_payment_records_llm(settings: Settings, document_id: str, context: 
         task="payment_records_from_embeddings",
         cache_dir=settings.llm_cache_dir,
         system_prompt=(
-            "Extract payment records from the provided chunk context. "
-            "Return strict JSON only. Do not infer facts not present."
+            "Extract payment records from the provided context.\n"
+            "Rules:\n"
+            "- Use only facts explicitly present in the context; do not infer missing values.\n"
+            "- Return strict JSON only matching the schema.\n"
+            "- If multiple currencies appear, preserve the currency symbol or code alongside each amount.\n"
+            "- Use null (not empty string) for any field that is not present in the context.\n"
+            "- If the context is ambiguous or truncated, record the ambiguity in the 'notes' field."
         ),
         user_prompt=(
-            "Return JSON with schema:\n"
-            "{\"records\":[{\"document_type\":\"receipt|invoice|payment_sheet|pay_stub|payment_record\","
-            "\"pay_period\":null,\"pay_date\":null,\"gross_pay\":null,\"net_pay\":null,"
-            "\"currency\":null,\"items\":[{\"description\":\"...\",\"amount\":0.0,\"currency\":\"USD\"}],"
-            "\"validation_notes\":null,\"evidence_chunk_ids\":[\"...\"]}]}\n\n"
+            "Extract any payment records found in the context below.\n\n"
+            "document_type enum (choose one): "
+            "[\"receipt\", \"invoice\", \"payment_sheet\", \"pay_stub\", \"payment_record\", \"unknown\"]\n\n"
+            "JSON schema:\n"
+            "{\"records\":[{"
+            "\"document_type\": \"<enum above>\","
+            "\"pay_period\": null,"
+            "\"pay_date\": null,"
+            "\"gross_pay\": null,"
+            "\"net_pay\": null,"
+            "\"currency\": null,"
+            "\"items\": [{\"description\": \"...\", \"amount\": 0.0, \"currency\": null}],"
+            "\"notes\": null"
+            "}]}\n\n"
             "Rules:\n"
-            "- Include only records supported by context.\n"
-            "- Keep optional fields null if missing.\n"
-            "- Use numbers for amounts.\n\n"
-            f"document_id: {document_id}\n"
-            f"context:\n{context}"
+            "- Include only records supported by the context.\n"
+            "- Use numbers for amounts; never strings.\n"
+            "- Do not include evidence_chunk_ids unless chunk_ids appear verbatim in the context.\n\n"
+            f"CONTEXT:\n{context}\n\n"
+            "Return JSON only."
         ),
         max_output_tokens=1500,
     )
@@ -206,7 +220,7 @@ def _normalize_record(record: dict) -> dict:
             notes.append("net_pay_exceeds_gross_pay")
     except Exception:
         notes.append("invalid_numeric_pay_fields")
-    provided_notes = record.get("validation_notes")
+    provided_notes = record.get("notes") or record.get("validation_notes")
     if isinstance(provided_notes, str) and provided_notes.strip():
         notes.append(provided_notes.strip())
 

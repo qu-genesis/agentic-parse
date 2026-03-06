@@ -94,6 +94,7 @@ def init_schema(conn: Connection) -> None:
             timestamp_end_ms INTEGER,
             fallback_trigger_reason TEXT,
             fallback_region TEXT,
+            page_type TEXT NOT NULL DEFAULT 'text',
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(document_id, page_number),
@@ -200,11 +201,35 @@ def init_schema(conn: Connection) -> None:
         )
         """,
 
+        """
+        CREATE TABLE IF NOT EXISTS costly_calls (
+            id SERIAL PRIMARY KEY,
+            stage TEXT NOT NULL,
+            step TEXT NOT NULL,
+            location TEXT NOT NULL,
+            call_type TEXT NOT NULL,
+            document_id TEXT,
+            page_id TEXT,
+            chunk_id TEXT,
+            provider TEXT,
+            model_version TEXT,
+            duration_ms REAL NOT NULL,
+            token_input INTEGER NOT NULL DEFAULT 0,
+            token_output INTEGER NOT NULL DEFAULT 0,
+            cache_hit BOOLEAN,
+            success BOOLEAN,
+            metadata_json TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+
         "CREATE INDEX IF NOT EXISTS idx_documents_status_ocr ON documents(status_ocr)",
         "CREATE INDEX IF NOT EXISTS idx_documents_status_asr ON documents(status_asr)",
         "CREATE INDEX IF NOT EXISTS idx_documents_summary_status ON documents(summary_status)",
         "CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id)",
         "CREATE INDEX IF NOT EXISTS idx_pages_doc ON pages(document_id)",
+        "CREATE INDEX IF NOT EXISTS idx_costly_calls_stage ON costly_calls(stage)",
+        "CREATE INDEX IF NOT EXISTS idx_costly_calls_created_at ON costly_calls(created_at)",
     ]
 
     for stmt in stmts:
@@ -223,6 +248,7 @@ def init_schema(conn: Connection) -> None:
     _ensure_column(conn, "pages", "timestamp_end_ms", "INTEGER")
     _ensure_column(conn, "pages", "fallback_trigger_reason", "TEXT")
     _ensure_column(conn, "pages", "fallback_region", "TEXT")
+    _ensure_column(conn, "pages", "page_type", "TEXT NOT NULL DEFAULT 'text'")
 
     _ensure_column(conn, "chunks", "chunk_text_hash", "TEXT")
     _ensure_column(conn, "chunks", "embedding_model", "TEXT")

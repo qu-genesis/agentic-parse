@@ -40,6 +40,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("--max-chunks", type=int, default=20)
     p_query.add_argument("--max-tokens", type=int, default=6000)
 
+    p_cost = sub.add_parser("cost-report", help="Show costly-step hotspots for scaling analysis.")
+    p_cost.add_argument("--top", type=int, default=20)
+    p_cost.add_argument("--stage", default=None)
+
     p_all = sub.add_parser("all", help="Run full pipeline end to end.")
     p_all.add_argument("--workers", type=int, default=4)
 
@@ -57,11 +61,99 @@ def _status(conn) -> str:
     rels = conn.execute("SELECT COUNT(*) FROM relationships").fetchone()[0]
     paystubs = conn.execute("SELECT COUNT(*) FROM paystubs").fetchone()[0]
     fallback_events = conn.execute("SELECT COUNT(*) FROM fallback_events").fetchone()[0]
+    costly_calls = conn.execute("SELECT COUNT(*) FROM costly_calls").fetchone()[0]
     return (
         f"documents={doc_total} ocr_done={done_ocr} embed_done={done_embed} "
         f"entities_done={done_entities} pages={pages} chunks={chunks} "
-        f"relationships={rels} paystubs={paystubs} fallback_events={fallback_events}"
+        f"relationships={rels} paystubs={paystubs} fallback_events={fallback_events} "
+        f"costly_calls={costly_calls}"
     )
+
+
+def _cost_report(conn, *, top: int, stage: str | None) -> str:
+    rows = conn.execute(
+        """
+        SELECT
+            stage,
+            step,
+            call_type,
+            location,
+            COUNT(*) AS calls,
+            SUM(duration_ms) AS total_ms,
+            AVG(duration_ms) AS avg_ms,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms,
+            SUM(CASE WHEN cache_hit IS TRUE THEN 1 ELSE 0 END) AS cache_hits,
+            SUM(CASE WHEN success IS TRUE THEN 1 ELSE 0 END) AS successes
+        FROM costly_calls
+        WHERE (%s IS NULL OR stage = %s)
+        GROUP BY stage, step, call_type, location
+        ORDER BY total_ms DESC
+        LIMIT %s
+        """,
+        (stage, stage, max(1, top)),
+    ).fetchall()
+
+    if not rows:
+        return "cost-report: no costly_calls rows found"
+
+    stage_rows = conn.execute(
+        """
+        SELECT
+            stage,
+            COUNT(*) AS calls,
+            SUM(duration_ms) AS total_ms,
+            AVG(duration_ms) AS avg_ms,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms
+        FROM costly_calls
+        WHERE (%s IS NULL OR stage = %s)
+        GROUP BY stage
+        ORDER BY total_ms DESC
+        """,
+        (stage, stage),
+    ).fetchall()
+
+    lines = []
+    lines.append("=== Costly Call Hotspots ===")
+    lines.append("stage | step | call_type | location | calls | total_ms | avg_ms | p95_ms | cache_hit_rate | success_rate")
+    for row in rows:
+        calls = int(row["calls"] or 0)
+        cache_hits = int(row["cache_hits"] or 0)
+        successes = int(row["successes"] or 0)
+        cache_rate = (cache_hits / calls * 100.0) if calls else 0.0
+        success_rate = (successes / calls * 100.0) if calls else 0.0
+        lines.append(
+            " | ".join(
+                [
+                    str(row["stage"]),
+                    str(row["step"]),
+                    str(row["call_type"]),
+                    str(row["location"]),
+                    str(calls),
+                    f"{float(row['total_ms'] or 0.0):.2f}",
+                    f"{float(row['avg_ms'] or 0.0):.2f}",
+                    f"{float(row['p95_ms'] or 0.0):.2f}",
+                    f"{cache_rate:.1f}%",
+                    f"{success_rate:.1f}%",
+                ]
+            )
+        )
+
+    lines.append("")
+    lines.append("=== Stage Scaling Summary ===")
+    lines.append("stage | calls | total_ms | avg_ms | p95_ms")
+    for row in stage_rows:
+        lines.append(
+            " | ".join(
+                [
+                    str(row["stage"]),
+                    str(int(row["calls"] or 0)),
+                    f"{float(row['total_ms'] or 0.0):.2f}",
+                    f"{float(row['avg_ms'] or 0.0):.2f}",
+                    f"{float(row['p95_ms'] or 0.0):.2f}",
+                ]
+            )
+        )
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -137,6 +229,10 @@ def main() -> None:
                 ]
             )
         )
+        return
+
+    if args.command == "cost-report":
+        print(_cost_report(conn, top=args.top, stage=args.stage))
         return
 
     if args.command == "status":

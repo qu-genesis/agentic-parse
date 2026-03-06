@@ -42,6 +42,10 @@ class Settings:
         return self.workspace / "outputs" / "paystubs.jsonl"
 
     @property
+    def costly_calls_jsonl(self) -> Path:
+        return self.workspace / "outputs" / "costly_calls.jsonl"
+
+    @property
     def entities_dir(self) -> Path:
         return self.workspace / "outputs" / "entities"
 
