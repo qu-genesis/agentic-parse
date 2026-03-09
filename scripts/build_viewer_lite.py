@@ -32,8 +32,9 @@ def _parse_summary(text: str) -> tuple[dict | None, str]:
     return None, stripped
 
 
-def load_data(workspace: Path) -> list[dict]:
+def load_data(workspace: Path) -> tuple[list[dict], dict, dict]:
     catalogue = workspace / "outputs" / "document_catalogue.jsonl"
+    grouped_catalogue = workspace / "outputs" / "document_summary_catalogue.json"
     summaries_dir = workspace / "derived" / "summaries"
 
     docs_raw = [json.loads(l) for l in catalogue.read_text().splitlines() if l.strip()]
@@ -70,13 +71,38 @@ def load_data(workspace: Path) -> list[dict]:
         })
 
     docs.sort(key=lambda d: (not bool(d["summary"]), d["name"].lower()))
-    return docs
+    grouped = {}
+    if grouped_catalogue.exists():
+        try:
+            payload = json.loads(grouped_catalogue.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                grouped = payload
+        except json.JSONDecodeError:
+            grouped = {}
+
+    # Build entity → [doc_id] map from summary_json key_entities
+    entity_map: dict[str, list[str]] = {}
+    for doc in docs:
+        sj = doc.get("summary_json") or {}
+        entities = sj.get("key_entities", []) if isinstance(sj, dict) else []
+        for ent in entities:
+            ent = str(ent).strip()
+            if not ent:
+                continue
+            entity_map.setdefault(ent, []).append(doc["id"])
+
+    return docs, grouped, entity_map
 
 
 # ── HTML template ──────────────────────────────────────────────────────────────
 
-def generate_html(docs: list[dict]) -> str:
+def generate_html(docs: list[dict], grouped_catalogue: dict, entity_map: dict) -> str:
     data_json = json.dumps(docs, ensure_ascii=False, separators=(",", ":"))
+    grouped_json = json.dumps(grouped_catalogue, ensure_ascii=False, separators=(",", ":"))
+    entity_json = json.dumps(
+        {k: v for k, v in sorted(entity_map.items())},
+        ensure_ascii=False, separators=(",", ":")
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -228,6 +254,21 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 .toc-num{{font-size:11px;font-weight:700;color:#7c3aed;min-width:16px;flex-shrink:0}}
 .toc-text{{font-size:12.5px;line-height:1.5;color:#334155}}
 .toc-pages{{font-size:11px;color:#94a3b8}}
+
+/* ── Grouped catalogue ── */
+#catalogue-empty{{font-size:13px;color:var(--muted);font-style:italic}}
+#catalogue-list{{display:flex;flex-direction:column;gap:12px}}
+.cat-group{{border:1px solid #edf1f8;border-radius:8px;padding:10px 12px;background:#fafcff}}
+.cat-group-head{{display:flex;justify-content:space-between;gap:8px;align-items:baseline}}
+.cat-group-label{{font-size:12.5px;font-weight:700;color:#1e293b;text-transform:capitalize}}
+.cat-group-count{{font-size:11px;color:#64748b;white-space:nowrap}}
+.cat-group-desc{{margin-top:5px;font-size:11.5px;color:#475569;line-height:1.5}}
+.cat-subgroup{{margin-top:8px}}
+.cat-subgroup-label{{font-size:10.5px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.45px;margin-bottom:4px}}
+.cat-docs{{display:flex;flex-wrap:wrap;gap:5px}}
+.cat-doc-btn{{padding:3px 7px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:11px;cursor:pointer;line-height:1.35}}
+.cat-doc-btn:hover{{border-color:#818cf8;color:#312e81;background:#eef2ff}}
+.cat-doc-btn.active{{background:#4f46e5;color:#fff;border-color:#4f46e5}}
 </style>
 </head>
 <body>
@@ -268,6 +309,13 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
             <div id="no-summary" style="display:none">No summary generated for this document.</div>
           </div>
         </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Document Catalogue</span></div>
+          <div class="card-body">
+            <div id="catalogue-empty" style="display:none">No grouped catalogue generated yet. Run the summarize stage to build it.</div>
+            <div id="catalogue-list" style="display:none"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -299,6 +347,10 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 
 <script>
 const DOCS = {data_json};
+const CATALOGUE = {grouped_json};
+const ENTITY_MAP = {entity_json};
+const ENTITIES = Object.keys(ENTITY_MAP).sort((a,b)=>a.localeCompare(b));
+const DOC_BY_ID = Object.fromEntries(DOCS.map(d => [d.id, d]));
 
 let currentDocIdx = -1;
 let pdfVisible = true;
@@ -347,6 +399,7 @@ function selectDoc(idx){{
     <span class="chip size">${{fmtSize(doc.size)}}</span>`;
 
   renderSummary(doc);
+  renderCatalogue(doc.id);
   loadPdf(doc);
 
   document.querySelectorAll(".doc-item").forEach(el=>
@@ -443,6 +496,70 @@ function sumToc(toc){{
   </div>`;
 }}
 
+function renderCatalogue(activeDocId){{
+  const listEl=document.getElementById("catalogue-list");
+  const emptyEl=document.getElementById("catalogue-empty");
+  const groups=(CATALOGUE&&Array.isArray(CATALOGUE.groups))?CATALOGUE.groups:[];
+  if(!groups.length){{
+    listEl.style.display="none";
+    listEl.innerHTML="";
+    emptyEl.style.display="";
+    return;
+  }}
+
+  emptyEl.style.display="none";
+  listEl.style.display="";
+  listEl.innerHTML=groups.map(group=>catalogueGroupHtml(group,activeDocId)).join("");
+}}
+
+function catalogueGroupHtml(group,activeDocId){{
+  const subgroups=Array.isArray(group.subgroups)?group.subgroups:[];
+  const groupedIds=new Set();
+  const subgroupHtml=subgroups.map(sg=>{{
+    const ids=(Array.isArray(sg.document_ids)?sg.document_ids:[]).filter(id=>DOC_BY_ID[id]);
+    ids.forEach(id=>groupedIds.add(id));
+    if(!ids.length) return "";
+    return `
+      <div class="cat-subgroup">
+        <div class="cat-subgroup-label">${{esc(sg.label||"related subgroup")}}</div>
+        <div class="cat-docs">${{catalogueDocButtons(ids,activeDocId)}}</div>
+      </div>`;
+  }}).join("");
+
+  const topLevelIds=(Array.isArray(group.document_ids)?group.document_ids:[])
+    .filter(id=>DOC_BY_ID[id]&&!groupedIds.has(id));
+  const topLevelHtml=topLevelIds.length?`
+    <div class="cat-subgroup">
+      <div class="cat-subgroup-label">Documents</div>
+      <div class="cat-docs">${{catalogueDocButtons(topLevelIds,activeDocId)}}</div>
+    </div>`:"";
+
+  return `
+    <div class="cat-group">
+      <div class="cat-group-head">
+        <span class="cat-group-label">${{esc(group.label||"uncategorized documents")}}</span>
+        <span class="cat-group-count">${{Number(group.document_count||0).toLocaleString()}} docs</span>
+      </div>
+      ${{group.description?`<div class="cat-group-desc">${{esc(group.description)}}</div>`:""}}
+      ${{subgroupHtml}}
+      ${{topLevelHtml}}
+    </div>`;
+}}
+
+function catalogueDocButtons(docIds,activeDocId){{
+  return docIds.map(docId=>{{
+    const doc=DOC_BY_ID[docId];
+    if(!doc) return "";
+    const activeClass=docId===activeDocId?" active":"";
+    return `<button class="cat-doc-btn${{activeClass}}" onclick="selectDocById('${{escJs(docId)}}')">${{esc(doc.name)}}</button>`;
+  }}).join("");
+}}
+
+function selectDocById(docId){{
+  const idx=DOCS.findIndex(d=>d.id===docId);
+  if(idx>=0) selectDoc(idx);
+}}
+
 // ── Draggable divider ──────────────────────────────────────────────────────────
 (function(){{
   const divider=document.getElementById("divider");
@@ -475,10 +592,16 @@ function esc(s){{
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }}
 
+function escJs(s){{
+  if(!s) return "";
+  return String(s).replace(/'/g,"\\'");
+}}
+
 // Init
 renderSidebar(DOCS);
 const first=DOCS.findIndex(d=>d.summary);
 if(first>=0) selectDoc(first);
+else if(DOCS.length) selectDoc(0);
 </script>
 </body>
 </html>"""
@@ -490,11 +613,12 @@ def main() -> None:
     args = parser.parse_args()
 
     print("Loading pipeline outputs…")
-    docs = load_data(args.workspace)
+    docs, grouped_catalogue, entity_map = load_data(args.workspace)
     summarised = sum(1 for d in docs if d["summary"])
-    print(f"  {len(docs)} documents, {summarised} with summaries")
+    grouped_count = int(grouped_catalogue.get("group_count", 0)) if isinstance(grouped_catalogue, dict) else 0
+    print(f"  {len(docs)} documents, {summarised} with summaries, {grouped_count} catalogue groups")
 
-    html = generate_html(docs)
+    html = generate_html(docs, grouped_catalogue, entity_map)
     out = args.workspace / "viewer_lite.html"
     out.write_text(html, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
