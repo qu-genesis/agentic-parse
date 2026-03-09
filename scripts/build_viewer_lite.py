@@ -126,7 +126,7 @@ def generate_html(docs: list[dict], grouped_catalogue: dict, entity_map: dict) -
   --light:#94a3b8;
   --font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 }}
-body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;overflow:hidden;user-select:none}}
+body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}}
 
 /* ── Sidebar ── */
 #sidebar{{
@@ -269,9 +269,38 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 .cat-doc-btn{{padding:3px 7px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:11px;cursor:pointer;line-height:1.35}}
 .cat-doc-btn:hover{{border-color:#818cf8;color:#312e81;background:#eef2ff}}
 .cat-doc-btn.active{{background:#4f46e5;color:#fff;border-color:#4f46e5}}
+
+/* ── Top nav ── */
+#top-nav{{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;height:44px;min-height:44px;
+  background:var(--sidebar-bg);border-bottom:2px solid #0f172a;
+  flex-shrink:0;
+}}
+#nav-title{{color:#f1f5f9;font-size:14px;font-weight:700;letter-spacing:.2px}}
+#nav-tabs{{display:flex;gap:4px}}
+.nav-tab{{
+  padding:5px 16px;border-radius:6px;border:none;cursor:pointer;
+  font-size:13px;font-weight:600;background:transparent;color:#94a3b8;
+  transition:background .1s,color .1s;
+}}
+.nav-tab:hover{{background:#2d3f55;color:#e2e8f0}}
+.nav-tab.active{{background:var(--accent);color:#fff}}
 </style>
 </head>
 <body>
+
+<!-- Top nav -->
+<div id="top-nav">
+  <span id="nav-title">Document Viewer</span>
+  <div id="nav-tabs">
+    <button class="nav-tab active" id="tab-catalogue" onclick="showPage('catalogue')">Catalogue</button>
+    <button class="nav-tab" id="tab-viewer" onclick="showPage('viewer')">Viewer</button>
+  </div>
+</div>
+
+<!-- Page 2: Viewer -->
+<div id="viewer-page" style="display:none;flex:1;min-height:0;overflow:hidden;flex-direction:row">
 
 <!-- Sidebar -->
 <div id="sidebar">
@@ -345,6 +374,8 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 
 <button id="btn-show-pdf" onclick="togglePdf()">Show PDF</button>
 
+</div><!-- end #viewer-page -->
+
 <script>
 const DOCS = {data_json};
 const CATALOGUE = {grouped_json};
@@ -355,6 +386,14 @@ const DOC_BY_ID = Object.fromEntries(DOCS.map(d => [d.id, d]));
 let currentDocIdx = -1;
 let pdfVisible = true;
 let currentPdfPath = null;
+
+// ── Page navigation ────────────────────────────────────────────────────────────
+function showPage(page) {{
+  document.getElementById('catalogue-page').style.display = page==='catalogue' ? 'flex' : 'none';
+  document.getElementById('viewer-page').style.display = page==='viewer' ? 'flex' : 'none';
+  document.getElementById('tab-catalogue').classList.toggle('active', page==='catalogue');
+  document.getElementById('tab-viewer').classList.toggle('active', page==='viewer');
+}}
 
 // ── Sidebar ────────────────────────────────────────────────────────────────────
 function fmtSize(b){{ return b>1048576?(b/1048576).toFixed(1)+" MB":(b/1024).toFixed(0)+" KB"; }}
