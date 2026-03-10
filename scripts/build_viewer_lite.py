@@ -113,6 +113,7 @@ def generate_html(docs: list[dict], grouped_catalogue: dict, entity_map: dict, r
         {k: v for k, v in sorted(entity_map.items())},
         ensure_ascii=False, separators=(",", ":")
     )
+    registry_json = json.dumps(registry, ensure_ascii=False, separators=(",", ":"))
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -439,6 +440,12 @@ const CATALOGUE = {grouped_json};
 const ENTITY_MAP = {entity_json};
 const ENTITIES = Object.keys(ENTITY_MAP).sort((a,b)=>a.localeCompare(b));
 const DOC_BY_ID = Object.fromEntries(DOCS.map(d => [d.id, d]));
+const ENTITY_REGISTRY = {registry_json};
+const HAS_REGISTRY = ENTITY_REGISTRY.length > 0;
+const PEOPLE = ENTITY_REGISTRY.filter(e=>e.kind==='person').sort((a,b)=>b.mention_count-a.mention_count||a.canonical_name.localeCompare(b.canonical_name));
+const ORGS = ENTITY_REGISTRY.filter(e=>e.kind==='organization').sort((a,b)=>b.mention_count-a.mention_count||a.canonical_name.localeCompare(b.canonical_name));
+const REGISTRY_BY_DOC = {{}};
+ENTITY_REGISTRY.forEach(e=>e.document_ids.forEach(id=>{{(REGISTRY_BY_DOC[id]=REGISTRY_BY_DOC[id]||[]).push(e)}}));
 
 let currentDocIdx = -1;
 let pdfVisible = true;
