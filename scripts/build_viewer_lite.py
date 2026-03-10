@@ -302,12 +302,18 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
   max-width:220px;cursor:pointer;outline:none;
 }}
 #entity-select:focus{{border-color:var(--accent)}}
-#btn-entity-open{{
+#people-select,#orgs-select{{
+  padding:5px 10px;border-radius:6px;border:1px solid var(--border);
+  background:var(--card-bg);color:var(--text);font-size:12.5px;
+  max-width:200px;cursor:pointer;outline:none;
+}}
+#people-select:focus,#orgs-select:focus{{border-color:var(--accent)}}
+.entity-open-btn{{
   padding:5px 12px;border-radius:6px;border:none;background:var(--accent);
   color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;
 }}
-#btn-entity-open:hover{{background:#4338ca}}
-#btn-entity-open:disabled{{background:#c7d2fe;cursor:default}}
+.entity-open-btn:hover{{background:#4338ca}}
+.entity-open-btn:disabled{{background:#c7d2fe;cursor:default}}
 #catalogue-page-body{{
   flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:14px;
 }}
@@ -349,11 +355,27 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 <div id="catalogue-page" style="flex:1;min-height:0;flex-direction:column">
   <div id="catalogue-page-header">
     <span id="catalogue-page-title">Document Catalogue</span>
-    <div id="catalogue-filter-controls">
-      <select id="entity-select" onchange="onEntityChange()">
-        <option value="">All entities</option>
-      </select>
-      <button id="btn-entity-open" onclick="openEntityDoc()" disabled>→ Open</button>
+    <div id="catalogue-filter-controls" style="display:flex;align-items:center;gap:14px">
+      <div id="registry-filter-controls" style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <select id="people-select" onchange="onRegistryFilterChange('people')">
+            <option value="">All people</option>
+          </select>
+          <button id="btn-people-open" class="entity-open-btn" onclick="openRegistryDoc('people')" disabled>→ Open</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <select id="orgs-select" onchange="onRegistryFilterChange('orgs')">
+            <option value="">All organizations</option>
+          </select>
+          <button id="btn-orgs-open" class="entity-open-btn" onclick="openRegistryDoc('orgs')" disabled>→ Open</button>
+        </div>
+      </div>
+      <div id="legacy-filter-controls" style="display:flex;align-items:center;gap:8px">
+        <select id="entity-select" onchange="onEntityChange()">
+          <option value="">All entities</option>
+        </select>
+        <button id="btn-entity-open" class="entity-open-btn" onclick="openEntityDoc()" disabled>→ Open</button>
+      </div>
     </div>
   </div>
   <div id="catalogue-page-body">
@@ -653,53 +675,90 @@ function selectDocById(docId){{
 
 // ── Catalogue page ─────────────────────────────────────────────────────────────
 function initCataloguePage() {{
-  const sel = document.getElementById('entity-select');
-  ENTITIES.forEach(e => {{
-    const opt = document.createElement('option');
-    opt.value = e;
-    opt.textContent = e;
-    sel.appendChild(opt);
-  }});
+  if (HAS_REGISTRY) {{
+    document.getElementById('legacy-filter-controls').style.display='none';
+    const pSel=document.getElementById('people-select');
+    PEOPLE.forEach(e=>{{
+      const opt=document.createElement('option');
+      opt.value=e.entity_id;
+      opt.textContent=e.canonical_name;
+      opt.title=e.mention_count+' mention'+(e.mention_count!==1?'s':'');
+      pSel.appendChild(opt);
+    }});
+    const oSel=document.getElementById('orgs-select');
+    ORGS.forEach(e=>{{
+      const opt=document.createElement('option');
+      opt.value=e.entity_id;
+      opt.textContent=e.canonical_name;
+      opt.title=e.mention_count+' mention'+(e.mention_count!==1?'s':'');
+      oSel.appendChild(opt);
+    }});
+  }} else {{
+    document.getElementById('registry-filter-controls').style.display='none';
+    const sel=document.getElementById('entity-select');
+    ENTITIES.forEach(e=>{{
+      const opt=document.createElement('option');
+      opt.value=e; opt.textContent=e;
+      sel.appendChild(opt);
+    }});
+  }}
   renderCataloguePage(null);
 }}
 
-function renderCataloguePage(filterEntity) {{
-  const listEl = document.getElementById('catalogue-page-list');
-  const emptyEl = document.getElementById('catalogue-page-empty');
-  const groups = (CATALOGUE && Array.isArray(CATALOGUE.groups)) ? CATALOGUE.groups : [];
-  if (!groups.length) {{
-    listEl.innerHTML = '';
-    emptyEl.style.display = '';
-    return;
+function onRegistryFilterChange(kind) {{
+  const otherId=kind==='people'?'orgs-select':'people-select';
+  const otherBtnId=kind==='people'?'btn-orgs-open':'btn-people-open';
+  document.getElementById(otherId).value='';
+  document.getElementById(otherBtnId).disabled=true;
+  const selId=kind==='people'?'people-select':'orgs-select';
+  const btnId=kind==='people'?'btn-people-open':'btn-orgs-open';
+  const entityId=document.getElementById(selId).value;
+  document.getElementById(btnId).disabled=!entityId;
+  if(entityId){{
+    const entry=ENTITY_REGISTRY.find(e=>e.entity_id===entityId);
+    renderCataloguePage(entry?new Set(entry.document_ids):null);
+  }} else {{
+    renderCataloguePage(null);
   }}
-  emptyEl.style.display = 'none';
+}}
 
-  const matchingIds = filterEntity ? new Set(ENTITY_MAP[filterEntity] || []) : null;
-
-  listEl.innerHTML = groups.map(group => {{
-    const groupDocIds = Array.isArray(group.document_ids) ? group.document_ids : [];
-    const hasMatch = !matchingIds || groupDocIds.some(id => matchingIds.has(id));
-    const dimmed = !!(matchingIds && !hasMatch);
-    return catalogueGroupHtml(group, null, matchingIds, dimmed);
-  }}).join('');
+function openRegistryDoc(kind) {{
+  const selId=kind==='people'?'people-select':'orgs-select';
+  const entityId=document.getElementById(selId).value;
+  if(!entityId) return;
+  const entry=ENTITY_REGISTRY.find(e=>e.entity_id===entityId);
+  if(!entry||!entry.document_ids.length) return;
+  const idx=DOCS.findIndex(d=>d.id===entry.document_ids[0]);
+  if(idx>=0){{showPage('viewer');selectDoc(idx);}}
 }}
 
 function onEntityChange() {{
-  const entity = document.getElementById('entity-select').value;
-  document.getElementById('btn-entity-open').disabled = !entity;
-  renderCataloguePage(entity || null);
+  const entity=document.getElementById('entity-select').value;
+  document.getElementById('btn-entity-open').disabled=!entity;
+  renderCataloguePage(entity?new Set(ENTITY_MAP[entity]||[]):null);
 }}
 
 function openEntityDoc() {{
-  const entity = document.getElementById('entity-select').value;
-  if (!entity) return;
-  const docIds = ENTITY_MAP[entity] || [];
-  if (!docIds.length) return;
-  const idx = DOCS.findIndex(d => d.id === docIds[0]);
-  if (idx >= 0) {{
-    showPage('viewer');
-    selectDoc(idx);
-  }}
+  const entity=document.getElementById('entity-select').value;
+  if(!entity) return;
+  const docIds=ENTITY_MAP[entity]||[];
+  if(!docIds.length) return;
+  const idx=DOCS.findIndex(d=>d.id===docIds[0]);
+  if(idx>=0){{showPage('viewer');selectDoc(idx);}}
+}}
+
+function renderCataloguePage(matchingIds) {{
+  const listEl=document.getElementById('catalogue-page-list');
+  const emptyEl=document.getElementById('catalogue-page-empty');
+  const groups=(CATALOGUE&&Array.isArray(CATALOGUE.groups))?CATALOGUE.groups:[];
+  if(!groups.length){{listEl.innerHTML='';emptyEl.style.display='';return;}}
+  emptyEl.style.display='none';
+  listEl.innerHTML=groups.map(group=>{{
+    const groupDocIds=Array.isArray(group.document_ids)?group.document_ids:[];
+    const hasMatch=!matchingIds||groupDocIds.some(id=>matchingIds.has(id));
+    const dimmed=!!(matchingIds&&!hasMatch);
+    return catalogueGroupHtml(group,null,matchingIds,dimmed);
+  }}).join('');
 }}
 
 // ── Draggable divider ──────────────────────────────────────────────────────────

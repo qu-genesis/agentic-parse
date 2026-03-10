@@ -58,3 +58,17 @@ def test_generate_html_embeds_entity_registry():
 def test_generate_html_empty_registry_sets_has_registry_false():
     html = generate_html([], {}, {}, [])
     assert "ENTITY_REGISTRY = []" in html or "ENTITY_REGISTRY=[]" in html
+
+
+def test_generate_html_has_two_registry_dropdowns():
+    html = generate_html([], {}, {}, [])
+    assert 'id="people-select"' in html
+    assert 'id="orgs-select"' in html
+    assert 'id="registry-filter-controls"' in html
+    assert 'id="legacy-filter-controls"' in html
+
+
+def test_generate_html_has_registry_js_functions():
+    html = generate_html([], {}, {}, [])
+    assert "onRegistryFilterChange" in html
+    assert "openRegistryDoc" in html
