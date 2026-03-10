@@ -259,4 +259,11 @@ def init_schema(conn: Connection) -> None:
     _ensure_column(conn, "paystubs", "document_type", "TEXT")
     _ensure_column(conn, "paystubs", "items_json", "TEXT")
 
+    _ensure_column(
+        conn,
+        "documents",
+        "status_entity_names",
+        "TEXT NOT NULL DEFAULT 'pending'",
+    )
+
     conn.commit()

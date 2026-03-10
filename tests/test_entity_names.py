@@ -20,3 +20,20 @@ def test_config_entity_names_paths(tmp_path: Path) -> None:
     assert s.entity_registry_jsonl == tmp_path / "outputs" / "entity_registry.jsonl"
     s.ensure_dirs()
     assert s.entity_names_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Task 2: DB column
+# ---------------------------------------------------------------------------
+
+from agentic_parse.db import init_schema, connect
+
+
+def test_db_has_status_entity_names_column(tmp_path: Path) -> None:
+    import os
+    dsn = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/agentic_parse")
+    conn = connect(dsn)
+    init_schema(conn)
+    # Should not raise; column must exist after init
+    conn.execute("SELECT status_entity_names FROM documents LIMIT 0")
+    conn.close()
