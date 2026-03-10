@@ -22,6 +22,10 @@ class Settings:
         return self.workspace / "outputs" / "document_catalogue.jsonl"
 
     @property
+    def grouped_catalogue_json(self) -> Path:
+        return self.workspace / "outputs" / "document_summary_catalogue.json"
+
+    @property
     def relationships_jsonl(self) -> Path:
         return self.workspace / "outputs" / "relationships.jsonl"
 
@@ -50,6 +54,18 @@ class Settings:
         return self.workspace / "outputs" / "entities"
 
     @property
+    def entity_names_dir(self) -> Path:
+        return self.workspace / "outputs" / "entity_names"
+
+    @property
+    def entity_registry_json(self) -> Path:
+        return self.workspace / "outputs" / "entity_registry.json"
+
+    @property
+    def entity_registry_jsonl(self) -> Path:
+        return self.workspace / "outputs" / "entity_registry.jsonl"
+
+    @property
     def transcripts_dir(self) -> Path:
         return self.workspace / "derived" / "transcripts"
 
@@ -74,6 +90,7 @@ class Settings:
             self.workspace / "state",
             self.workspace / "outputs",
             self.entities_dir,
+            self.entity_names_dir,
             self.transcripts_dir,
             self.chunks_dir,
             self.summaries_dir,
