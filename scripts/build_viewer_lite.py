@@ -322,6 +322,21 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 .cat-group.dimmed{{opacity:0.25;pointer-events:none}}
 .cat-doc-btn.entity-match{{border-color:var(--accent);color:var(--accent);background:#eef2ff;font-weight:600}}
 
+/* ── Entity card ── */
+#entity-card{{display:none}}
+.ent-section{{margin-bottom:10px}}
+.ent-section:last-child{{margin-bottom:0}}
+.ent-kind-label{{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:6px}}
+.ent-chips{{display:flex;flex-wrap:wrap;gap:6px}}
+.ent-chip{{font-size:12px;padding:3px 10px;border-radius:999px;font-weight:500;border:1px solid}}
+.ent-chip.person{{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}}
+.ent-chip.org{{background:#f0fdf4;color:#15803d;border-color:#bbf7d0}}
+#entity-card-toggle{{
+  font-size:11px;padding:2px 8px;border-radius:5px;border:1px solid var(--border);
+  background:var(--bg);color:var(--muted);cursor:pointer;
+}}
+#entity-card-toggle:hover{{border-color:var(--accent);color:var(--accent)}}
+
 /* ── Top nav ── */
 #top-nav{{
   display:flex;align-items:center;justify-content:space-between;
@@ -425,6 +440,13 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
             <div id="no-summary" style="display:none">No summary generated for this document.</div>
           </div>
         </div>
+        <div class="card" id="entity-card">
+          <div class="card-header">
+            <span class="card-title">People &amp; Organizations</span>
+            <button id="entity-card-toggle" onclick="toggleEntityCard()">Show all</button>
+          </div>
+          <div class="card-body" id="entity-card-body"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -524,6 +546,7 @@ function selectDoc(idx){{
     <span class="chip size">${{fmtSize(doc.size)}}</span>`;
 
   renderSummary(doc);
+  renderEntityCard(doc);
   loadPdf(doc);
 
   document.querySelectorAll(".doc-item").forEach(el=>
@@ -572,7 +595,7 @@ function renderSummary(doc){{
   noSum.style.display="none";
 
   if(doc.summary_json){{
-    structured.innerHTML=buildSummaryHtml(doc.summary_json);
+    structured.innerHTML=buildSummaryHtml(doc.summary_json,doc.id);
     structured.style.display="";
   }} else if(doc.summary){{
     plain.textContent=doc.summary;
@@ -582,7 +605,50 @@ function renderSummary(doc){{
   }}
 }}
 
-function buildSummaryHtml(s){{
+// ── Entity card ────────────────────────────────────────────────────────────────
+let entityCardExpanded=false;
+const ENTITY_CARD_MAX=3;
+
+function renderEntityCard(doc){{
+  const card=document.getElementById('entity-card');
+  const body=document.getElementById('entity-card-body');
+  const toggle=document.getElementById('entity-card-toggle');
+  const entries=REGISTRY_BY_DOC[doc.id]||[];
+  if(!entries.length){{card.style.display='none';return;}}
+  card.style.display='';
+  entityCardExpanded=false;
+  toggle.textContent='Show all';
+  _renderEntityCardBody(body,entries,false);
+}}
+
+function _renderEntityCardBody(body,entries,expanded){{
+  const people=entries.filter(e=>e.kind==='person');
+  const orgs=entries.filter(e=>e.kind==='organization');
+  const chips=(list,cls)=>list.map(e=>`<span class="ent-chip ${{cls}}">${{esc(e.canonical_name)}}</span>`).join('');
+  let h='';
+  if(people.length){{
+    const shown=expanded?people:people.slice(0,ENTITY_CARD_MAX);
+    h+=`<div class="ent-section"><div class="ent-kind-label">People</div><div class="ent-chips">${{chips(shown,'person')}}</div></div>`;
+  }}
+  if(orgs.length){{
+    const shown=expanded?orgs:orgs.slice(0,ENTITY_CARD_MAX);
+    h+=`<div class="ent-section"><div class="ent-kind-label">Organizations</div><div class="ent-chips">${{chips(shown,'org')}}</div></div>`;
+  }}
+  body.innerHTML=h;
+  const toggle=document.getElementById('entity-card-toggle');
+  toggle.style.display=(people.length>ENTITY_CARD_MAX||orgs.length>ENTITY_CARD_MAX)?'':'none';
+}}
+
+function toggleEntityCard(){{
+  entityCardExpanded=!entityCardExpanded;
+  const doc=DOCS[currentDocIdx];
+  if(!doc) return;
+  const entries=REGISTRY_BY_DOC[doc.id]||[];
+  document.getElementById('entity-card-toggle').textContent=entityCardExpanded?'Show less':'Show all';
+  _renderEntityCardBody(document.getElementById('entity-card-body'),entries,entityCardExpanded);
+}}
+
+function buildSummaryHtml(s,docId){{
   const docType=s.document_type_or_mix||(s.document_types_present||[]).join(", ")||"";
   const purpose=s.purpose||s.overall_purpose||"";
   const entities=s.key_entities||[];
@@ -593,7 +659,8 @@ function buildSummaryHtml(s){{
   let h="";
   if(docType) h+=`<div class="sum-type">${{esc(docType)}}</div>`;
   if(purpose) h+=`<p class="sum-purpose">${{esc(purpose)}}</p>`;
-  if(entities.length) h+=sumList("Entities",entities);
+  const hasRegistryEntries=HAS_REGISTRY&&(REGISTRY_BY_DOC[docId]||[]).length>0;
+  if(!hasRegistryEntries&&entities.length) h+=sumList("Entities",entities);
   if(dates.length) h+=sumList("Dates / Timeline",dates);
   if(amounts.length) h+=sumList("Amounts",amounts);
   if(toc.length) h+=sumToc(toc);

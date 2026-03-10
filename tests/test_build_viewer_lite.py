@@ -72,3 +72,16 @@ def test_generate_html_has_registry_js_functions():
     html = generate_html([], {}, {}, [])
     assert "onRegistryFilterChange" in html
     assert "openRegistryDoc" in html
+
+
+def test_generate_html_has_entity_card():
+    html = generate_html([], {}, {}, [])
+    assert 'id="entity-card"' in html
+    assert 'id="entity-card-body"' in html
+    assert "renderEntityCard" in html
+    assert "toggleEntityCard" in html
+
+
+def test_generate_html_entity_card_fallback_removes_raw_entities_when_covered():
+    html = generate_html([], {}, {}, [])
+    assert "hasRegistryEntries" in html
