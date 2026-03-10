@@ -32,7 +32,7 @@ def _parse_summary(text: str) -> tuple[dict | None, str]:
     return None, stripped
 
 
-def load_data(workspace: Path) -> tuple[list[dict], dict, dict]:
+def load_data(workspace: Path) -> tuple[list[dict], dict, dict, list[dict]]:
     catalogue = workspace / "outputs" / "document_catalogue.jsonl"
     grouped_catalogue = workspace / "outputs" / "document_summary_catalogue.json"
     summaries_dir = workspace / "derived" / "summaries"
@@ -91,12 +91,22 @@ def load_data(workspace: Path) -> tuple[list[dict], dict, dict]:
                 continue
             entity_map.setdefault(ent, []).append(doc["id"])
 
-    return docs, grouped, entity_map
+    registry: list[dict] = []
+    registry_path = workspace / "outputs" / "entity_registry.json"
+    if registry_path.exists():
+        try:
+            data = json.loads(registry_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                registry = data
+        except (json.JSONDecodeError, OSError):
+            registry = []
+
+    return docs, grouped, entity_map, registry
 
 
 # ── HTML template ──────────────────────────────────────────────────────────────
 
-def generate_html(docs: list[dict], grouped_catalogue: dict, entity_map: dict) -> str:
+def generate_html(docs: list[dict], grouped_catalogue: dict, entity_map: dict, registry: list[dict]) -> str:
     data_json = json.dumps(docs, ensure_ascii=False, separators=(",", ":"))
     grouped_json = json.dumps(grouped_catalogue, ensure_ascii=False, separators=(",", ":"))
     entity_json = json.dumps(
@@ -256,19 +266,54 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
 .toc-pages{{font-size:11px;color:#94a3b8}}
 
 /* ── Grouped catalogue ── */
-#catalogue-empty{{font-size:13px;color:var(--muted);font-style:italic}}
-#catalogue-list{{display:flex;flex-direction:column;gap:12px}}
-.cat-group{{border:1px solid #edf1f8;border-radius:8px;padding:10px 12px;background:#fafcff}}
+.cat-group{{border:1px solid #edf1f8;border-radius:10px;padding:14px 16px;background:#fafcff}}
 .cat-group-head{{display:flex;justify-content:space-between;gap:8px;align-items:baseline}}
-.cat-group-label{{font-size:12.5px;font-weight:700;color:#1e293b;text-transform:capitalize}}
-.cat-group-count{{font-size:11px;color:#64748b;white-space:nowrap}}
-.cat-group-desc{{margin-top:5px;font-size:11.5px;color:#475569;line-height:1.5}}
-.cat-subgroup{{margin-top:8px}}
-.cat-subgroup-label{{font-size:10.5px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.45px;margin-bottom:4px}}
-.cat-docs{{display:flex;flex-wrap:wrap;gap:5px}}
-.cat-doc-btn{{padding:3px 7px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:11px;cursor:pointer;line-height:1.35}}
+.cat-group-label{{font-size:16px;font-weight:700;color:#1e293b;text-transform:capitalize}}
+.cat-group-count{{font-size:13px;color:#64748b;white-space:nowrap}}
+.cat-group-desc{{margin-top:6px;font-size:13.5px;color:#475569;line-height:1.6}}
+.cat-subgroup{{margin-top:10px}}
+.cat-subgroup-label{{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}}
+.cat-subgroup-label.hue-0{{color:#4f46e5}}
+.cat-subgroup-label.hue-1{{color:#0891b2}}
+.cat-subgroup-label.hue-2{{color:#d97706}}
+.cat-subgroup-label.hue-3{{color:#be185d}}
+.cat-subgroup-label.hue-4{{color:#059669}}
+.cat-subgroup-label.hue-5{{color:#7c3aed}}
+.cat-docs{{display:flex;flex-wrap:wrap;gap:6px}}
+.cat-doc-btn{{padding:4px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:13px;cursor:pointer;line-height:1.4}}
 .cat-doc-btn:hover{{border-color:#818cf8;color:#312e81;background:#eef2ff}}
 .cat-doc-btn.active{{background:#4f46e5;color:#fff;border-color:#4f46e5}}
+
+/* ── Catalogue page ── */
+#catalogue-page{{
+  flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;
+}}
+#catalogue-page-header{{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 24px;background:var(--card-bg);border-bottom:1px solid var(--border);
+  flex-shrink:0;gap:12px;
+}}
+#catalogue-page-title{{font-size:20px;font-weight:700;color:var(--text)}}
+#catalogue-filter-controls{{display:flex;align-items:center;gap:8px}}
+#entity-select{{
+  padding:5px 10px;border-radius:6px;border:1px solid var(--border);
+  background:var(--card-bg);color:var(--text);font-size:12.5px;
+  max-width:220px;cursor:pointer;outline:none;
+}}
+#entity-select:focus{{border-color:var(--accent)}}
+#btn-entity-open{{
+  padding:5px 12px;border-radius:6px;border:none;background:var(--accent);
+  color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;
+}}
+#btn-entity-open:hover{{background:#4338ca}}
+#btn-entity-open:disabled{{background:#c7d2fe;cursor:default}}
+#catalogue-page-body{{
+  flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:14px;
+}}
+#catalogue-page-body::-webkit-scrollbar{{width:6px}}
+#catalogue-page-body::-webkit-scrollbar-thumb{{background:#c1c9d6;border-radius:4px}}
+.cat-group.dimmed{{opacity:0.25;pointer-events:none}}
+.cat-doc-btn.entity-match{{border-color:var(--accent);color:var(--accent);background:#eef2ff;font-weight:600}}
 
 /* ── Top nav ── */
 #top-nav{{
@@ -296,6 +341,25 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
   <div id="nav-tabs">
     <button class="nav-tab active" id="tab-catalogue" onclick="showPage('catalogue')">Catalogue</button>
     <button class="nav-tab" id="tab-viewer" onclick="showPage('viewer')">Viewer</button>
+  </div>
+</div>
+
+<!-- Page 1: Catalogue -->
+<div id="catalogue-page" style="flex:1;min-height:0;flex-direction:column">
+  <div id="catalogue-page-header">
+    <span id="catalogue-page-title">Document Catalogue</span>
+    <div id="catalogue-filter-controls">
+      <select id="entity-select" onchange="onEntityChange()">
+        <option value="">All entities</option>
+      </select>
+      <button id="btn-entity-open" onclick="openEntityDoc()" disabled>→ Open</button>
+    </div>
+  </div>
+  <div id="catalogue-page-body">
+    <div id="catalogue-page-empty" style="display:none;color:var(--muted);font-style:italic;font-size:13px">
+      No catalogue groups generated yet. Run the summarize stage to build it.
+    </div>
+    <div id="catalogue-page-list"></div>
   </div>
 </div>
 
@@ -336,13 +400,6 @@ body{{font-family:var(--font);background:var(--bg);color:var(--text);height:100v
             <div id="summary-structured" style="display:none"></div>
             <div id="summary-text" style="display:none"></div>
             <div id="no-summary" style="display:none">No summary generated for this document.</div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-header"><span class="card-title">Document Catalogue</span></div>
-          <div class="card-body">
-            <div id="catalogue-empty" style="display:none">No grouped catalogue generated yet. Run the summarize stage to build it.</div>
-            <div id="catalogue-list" style="display:none"></div>
           </div>
         </div>
       </div>
@@ -438,7 +495,6 @@ function selectDoc(idx){{
     <span class="chip size">${{fmtSize(doc.size)}}</span>`;
 
   renderSummary(doc);
-  renderCatalogue(doc.id);
   loadPdf(doc);
 
   document.querySelectorAll(".doc-item").forEach(el=>
@@ -535,46 +591,31 @@ function sumToc(toc){{
   </div>`;
 }}
 
-function renderCatalogue(activeDocId){{
-  const listEl=document.getElementById("catalogue-list");
-  const emptyEl=document.getElementById("catalogue-empty");
-  const groups=(CATALOGUE&&Array.isArray(CATALOGUE.groups))?CATALOGUE.groups:[];
-  if(!groups.length){{
-    listEl.style.display="none";
-    listEl.innerHTML="";
-    emptyEl.style.display="";
-    return;
-  }}
-
-  emptyEl.style.display="none";
-  listEl.style.display="";
-  listEl.innerHTML=groups.map(group=>catalogueGroupHtml(group,activeDocId)).join("");
-}}
-
-function catalogueGroupHtml(group,activeDocId){{
+function catalogueGroupHtml(group,activeDocId,matchingIds=null,dimmed=false){{
   const subgroups=Array.isArray(group.subgroups)?group.subgroups:[];
   const groupedIds=new Set();
-  const subgroupHtml=subgroups.map(sg=>{{
+  const subgroupHtml=subgroups.map((sg,sgIdx)=>{{
     const ids=(Array.isArray(sg.document_ids)?sg.document_ids:[]).filter(id=>DOC_BY_ID[id]);
     ids.forEach(id=>groupedIds.add(id));
     if(!ids.length) return "";
     return `
       <div class="cat-subgroup">
-        <div class="cat-subgroup-label">${{esc(sg.label||"related subgroup")}}</div>
-        <div class="cat-docs">${{catalogueDocButtons(ids,activeDocId)}}</div>
+        <div class="cat-subgroup-label hue-${{sgIdx%6}}">${{esc(sg.label||"related subgroup")}}</div>
+        <div class="cat-docs">${{catalogueDocButtons(ids,activeDocId,matchingIds)}}</div>
       </div>`;
   }}).join("");
 
   const topLevelIds=(Array.isArray(group.document_ids)?group.document_ids:[])
     .filter(id=>DOC_BY_ID[id]&&!groupedIds.has(id));
+  const topHue=subgroups.length%6;
   const topLevelHtml=topLevelIds.length?`
     <div class="cat-subgroup">
-      <div class="cat-subgroup-label">Documents</div>
-      <div class="cat-docs">${{catalogueDocButtons(topLevelIds,activeDocId)}}</div>
+      <div class="cat-subgroup-label hue-${{topHue}}">Documents</div>
+      <div class="cat-docs">${{catalogueDocButtons(topLevelIds,activeDocId,matchingIds)}}</div>
     </div>`:"";
 
   return `
-    <div class="cat-group">
+    <div class="cat-group${{dimmed?' dimmed':''}}">
       <div class="cat-group-head">
         <span class="cat-group-label">${{esc(group.label||"uncategorized documents")}}</span>
         <span class="cat-group-count">${{Number(group.document_count||0).toLocaleString()}} docs</span>
@@ -585,18 +626,73 @@ function catalogueGroupHtml(group,activeDocId){{
     </div>`;
 }}
 
-function catalogueDocButtons(docIds,activeDocId){{
+function catalogueDocButtons(docIds,activeDocId,matchingIds=null){{
   return docIds.map(docId=>{{
     const doc=DOC_BY_ID[docId];
     if(!doc) return "";
     const activeClass=docId===activeDocId?" active":"";
-    return `<button class="cat-doc-btn${{activeClass}}" onclick="selectDocById('${{escJs(docId)}}')">${{esc(doc.name)}}</button>`;
+    const matchClass=matchingIds&&matchingIds.has(docId)?" entity-match":"";
+    return `<button class="cat-doc-btn${{activeClass}}${{matchClass}}" onclick="selectDocById('${{escJs(docId)}}')">${{esc(doc.name)}}</button>`;
   }}).join("");
 }}
 
 function selectDocById(docId){{
   const idx=DOCS.findIndex(d=>d.id===docId);
-  if(idx>=0) selectDoc(idx);
+  if(idx>=0){{
+    showPage('viewer');
+    selectDoc(idx);
+  }}
+}}
+
+// ── Catalogue page ─────────────────────────────────────────────────────────────
+function initCataloguePage() {{
+  const sel = document.getElementById('entity-select');
+  ENTITIES.forEach(e => {{
+    const opt = document.createElement('option');
+    opt.value = e;
+    opt.textContent = e;
+    sel.appendChild(opt);
+  }});
+  renderCataloguePage(null);
+}}
+
+function renderCataloguePage(filterEntity) {{
+  const listEl = document.getElementById('catalogue-page-list');
+  const emptyEl = document.getElementById('catalogue-page-empty');
+  const groups = (CATALOGUE && Array.isArray(CATALOGUE.groups)) ? CATALOGUE.groups : [];
+  if (!groups.length) {{
+    listEl.innerHTML = '';
+    emptyEl.style.display = '';
+    return;
+  }}
+  emptyEl.style.display = 'none';
+
+  const matchingIds = filterEntity ? new Set(ENTITY_MAP[filterEntity] || []) : null;
+
+  listEl.innerHTML = groups.map(group => {{
+    const groupDocIds = Array.isArray(group.document_ids) ? group.document_ids : [];
+    const hasMatch = !matchingIds || groupDocIds.some(id => matchingIds.has(id));
+    const dimmed = !!(matchingIds && !hasMatch);
+    return catalogueGroupHtml(group, null, matchingIds, dimmed);
+  }}).join('');
+}}
+
+function onEntityChange() {{
+  const entity = document.getElementById('entity-select').value;
+  document.getElementById('btn-entity-open').disabled = !entity;
+  renderCataloguePage(entity || null);
+}}
+
+function openEntityDoc() {{
+  const entity = document.getElementById('entity-select').value;
+  if (!entity) return;
+  const docIds = ENTITY_MAP[entity] || [];
+  if (!docIds.length) return;
+  const idx = DOCS.findIndex(d => d.id === docIds[0]);
+  if (idx >= 0) {{
+    showPage('viewer');
+    selectDoc(idx);
+  }}
 }}
 
 // ── Draggable divider ──────────────────────────────────────────────────────────
@@ -637,10 +733,8 @@ function escJs(s){{
 }}
 
 // Init
+initCataloguePage();
 renderSidebar(DOCS);
-const first=DOCS.findIndex(d=>d.summary);
-if(first>=0) selectDoc(first);
-else if(DOCS.length) selectDoc(0);
 </script>
 </body>
 </html>"""
@@ -652,12 +746,12 @@ def main() -> None:
     args = parser.parse_args()
 
     print("Loading pipeline outputs…")
-    docs, grouped_catalogue, entity_map = load_data(args.workspace)
+    docs, grouped_catalogue, entity_map, registry = load_data(args.workspace)
     summarised = sum(1 for d in docs if d["summary"])
     grouped_count = int(grouped_catalogue.get("group_count", 0)) if isinstance(grouped_catalogue, dict) else 0
     print(f"  {len(docs)} documents, {summarised} with summaries, {grouped_count} catalogue groups")
 
-    html = generate_html(docs, grouped_catalogue, entity_map)
+    html = generate_html(docs, grouped_catalogue, entity_map, registry)
     out = args.workspace / "viewer_lite.html"
     out.write_text(html, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
