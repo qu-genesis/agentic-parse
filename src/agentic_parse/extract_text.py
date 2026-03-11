@@ -191,11 +191,18 @@ def _preprocess_for_ocr(pil_image):
 
 
 def _ocr_pil(pil_image) -> tuple[str, float]:
-    """Run tesseract on a PIL image; return (text, normalised_confidence)."""
+    """Run tesseract on a PIL image; return (text, normalised_confidence).
+    --psm 1 enables automatic page segmentation with OSD so tesseract
+    handles orientation natively without needing a multi-rotation retry loop.
+    """
     try:
         import pytesseract  # type: ignore
         with _NATIVE_OCR_LOCK:
-            data = pytesseract.image_to_data(pil_image, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(
+                pil_image,
+                output_type=pytesseract.Output.DICT,
+                config="--psm 1",
+            )
         text = " ".join(t for t in data.get("text", []) if str(t).strip()).strip()
         conf_vals = [float(v) for v in data.get("conf", []) if float(v) >= 0]
         conf = (sum(conf_vals) / len(conf_vals) / 100.0) if conf_vals else 0.0
@@ -205,19 +212,13 @@ def _ocr_pil(pil_image) -> tuple[str, float]:
 
 
 def _run_tier1_pdf_page(path: Path, page_number: int) -> tuple[str, float] | None:
-    """OCR with 4-rotation search; return (best_text, best_conf) or None."""
-    best_text, best_conf = "", 0.0
-    any_rendered = False
-    for rotation in [0, 90, 180, 270]:
-        pil = _render_page_pil(path, page_number, scale=2.0, rotation=rotation)
-        if pil is None:
-            continue
-        any_rendered = True
-        processed = _preprocess_for_ocr(pil)
-        text, conf = _ocr_pil(processed)
-        if conf > best_conf:
-            best_text, best_conf = text, conf
-    return (best_text, best_conf) if any_rendered else None
+    """OCR a single rendered page; return (text, conf) or None."""
+    pil = _render_page_pil(path, page_number, scale=2.0, rotation=0)
+    if pil is None:
+        return None
+    processed = _preprocess_for_ocr(pil)
+    text, conf = _ocr_pil(processed)
+    return (text, conf)
 
 
 def _run_tier1_ocr_image(path: Path) -> tuple[str, float] | None:
@@ -924,6 +925,7 @@ def extract_text(settings: Settings, conn: Connection, workers: int = 4) -> int:
             f"stage_elapsed_s={(time.perf_counter() - stage_start):.2f}"
         )
 
+    conn.commit()
     record_stage_metric(
         settings,
         conn,

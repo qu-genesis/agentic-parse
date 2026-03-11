@@ -187,6 +187,14 @@ class LLMClient:
             if not text:
                 return None
             self._record_usage(self._estimate_tokens(system_prompt + user_prompt), self._estimate_tokens(text))
+            # Strip markdown code fences if model wraps response in ```json ... ```
+            if text.startswith("```"):
+                parts = text.split("```")
+                # parts[1] is the block content (may start with "json\n")
+                inner = parts[1] if len(parts) >= 2 else text
+                if inner.startswith("json"):
+                    inner = inner[4:]
+                text = inner.strip()
             data = json.loads(text)
             if not isinstance(data, dict):
                 return None
