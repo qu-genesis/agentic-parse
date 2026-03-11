@@ -22,8 +22,6 @@ def record_stage_metric(
     token_output: int = 0,
     metadata: dict | None = None,
 ) -> None:
-    if float(duration_ms) < _COSTLY_CALL_MIN_MS:
-        return
     payload = {
         "stage": stage,
         "processed_count": processed,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 import time
 
@@ -10,6 +9,7 @@ from tqdm import tqdm
 from .chunk_embed import retrieve_top_k_chunks
 from .config import Settings
 from .db import Connection
+from .document_catalogue import build_document_catalogue
 from .llm import get_llm_client
 from .telemetry import record_costly_call, record_stage_metric
 from .utils import atomic_write_text
@@ -74,6 +74,45 @@ def _refresh_catalogue_jsonl(settings: Settings, conn: Connection) -> None:
     settings.catalogue_jsonl.write_text(
         "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
     )
+
+
+def _write_grouped_catalogue(settings: Settings, conn: Connection, llm) -> tuple[int, int]:
+    """Build and persist grouped document catalogue from short summaries."""
+    rows = conn.execute(
+        """
+        SELECT document_id, path, doc_family, media_type, page_count
+        FROM documents
+        WHERE summary_status = 'done'
+        ORDER BY created_at ASC
+        """
+    ).fetchall()
+
+    docs: list[dict] = []
+    for row in rows:
+        summary_path = settings.summaries_dir / row["document_id"] / "document.summary.txt"
+        if not summary_path.exists():
+            continue
+        text = summary_path.read_text(encoding="utf-8", errors="ignore").strip()
+        if not text:
+            continue
+        docs.append(
+            {
+                "document_id": row["document_id"],
+                "name": Path(row["path"]).name,
+                "doc_family": row["doc_family"],
+                "media_type": row["media_type"],
+                "page_count": row["page_count"],
+                "summary_text": text,
+            }
+        )
+
+    payload = build_document_catalogue(
+        documents=docs,
+        llm=llm,
+        cache_dir=settings.llm_cache_dir,
+    )
+    atomic_write_text(settings.grouped_catalogue_json, json.dumps(payload, indent=2))
+    return int(payload.get("document_count", 0)), int(payload.get("group_count", 0))
 
 
 # ── Context building ──────────────────────────────────────────────────────────
@@ -290,7 +329,8 @@ def _segmented_summary(
             f"SECTION SUMMARIES:\n{toc}\n\n"
             "Return JSON only."
         ),
-        max_output_tokens=700,
+        # Scale token budget with segment count: ~60 tokens per TOC entry + 300 base
+        max_output_tokens=min(1400, 300 + 60 * len(segments)),
     )
 
     if composed:
@@ -441,11 +481,53 @@ def summarize(settings: Settings, conn: Connection) -> int:
         progress.set_postfix(processed=processed, skipped=skipped)
     progress.close()
 
+    catalogue_start = time.perf_counter()
+    catalogue_llm_event_start = llm.call_event_count()
+    grouped_doc_count, grouped_group_count = _write_grouped_catalogue(settings, conn, llm)
+    catalogue_events = llm.call_events_since(catalogue_llm_event_start)
+    for event in catalogue_events:
+        tqdm.write(
+            "[summarize][catalogue][llm] "
+            f"method={event['method']} task={event['task']} "
+            f"latency_ms={event['duration_ms']:.2f} "
+            f"cache_hit={event['cache_hit']} success={event['success']}"
+        )
+        record_costly_call(
+            settings,
+            conn,
+            stage="summarize",
+            step=str(event["task"]),
+            location="summarize._write_grouped_catalogue",
+            call_type="llm_call",
+            duration_ms=float(event["duration_ms"]),
+            provider="openai",
+            model_version=llm.model,
+            cache_hit=bool(event["cache_hit"]),
+            success=bool(event["success"]),
+            metadata={"method": event["method"], "operation": "catalogue_grouping"},
+        )
+    record_costly_call(
+        settings,
+        conn,
+        stage="summarize",
+        step="document_catalogue_grouping",
+        location="summarize._write_grouped_catalogue",
+        call_type="doc_operation",
+        duration_ms=(time.perf_counter() - catalogue_start) * 1000.0,
+        metadata={
+            "document_count": grouped_doc_count,
+            "group_count": grouped_group_count,
+            "llm_calls": len(catalogue_events),
+        },
+        success=True,
+    )
+
     after_in, after_out = llm.usage_snapshot()
     llm_events = llm.call_events_since(llm_event_start)
     tqdm.write(
         "[summarize] "
         f"documents={len(docs)} llm_calls={len(llm_events)} "
+        f"catalogue_docs={grouped_doc_count} catalogue_groups={grouped_group_count} "
         f"llm_total_ms={sum(float(e['duration_ms']) for e in llm_events):.2f} "
         f"elapsed_s={(time.perf_counter() - stage_start):.2f}"
     )
@@ -459,6 +541,6 @@ def summarize(settings: Settings, conn: Connection) -> int:
         token_input=max(0, after_in - before_in),
         token_output=max(0, after_out - before_out),
     )
-    conn.commit()
     _refresh_catalogue_jsonl(settings, conn)
+    conn.commit()
     return processed

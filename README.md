@@ -257,6 +257,7 @@ python -m agentic_parse.cli --workspace ./workspace --raw-root ./raw status
 ## Outputs
 
 - `workspace/outputs/document_catalogue.jsonl` — refreshed after each summarize run
+- `workspace/outputs/document_summary_catalogue.json` — grouped catalogue generated from short document summaries
 - `workspace/outputs/relationships.jsonl`
 - `workspace/outputs/paystubs.jsonl`
 - `workspace/outputs/fallback_events.jsonl`
